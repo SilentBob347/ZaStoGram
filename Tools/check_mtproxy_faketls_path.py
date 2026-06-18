@@ -66,6 +66,10 @@ def main() -> int:
         "proxy pacing must use a cancellable nonblocking Timer",
     )
     require(
+        "queuedDelay" in cpp and "lastProxyConnectTime > now" in cpp,
+        "nonblocking pacing must stagger bursts against the last scheduled connect time",
+    )
+    require(
         "pacingDeferred" not in combined,
         "old deferred pacing path must stay out of MTProxy connect",
     )

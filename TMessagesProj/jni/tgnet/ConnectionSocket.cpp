@@ -585,9 +585,10 @@ bool ConnectionSocket::scheduleProxyPacingIfNeeded(bool ipv6) {
     pthread_mutex_lock(&proxyJitterMutex);
     elapsed = now - lastProxyConnectTime;
     if (elapsed < 450) {
-        delay = 120 + (int) secureRandomBounded(181); // 120..300 ms
-        if (elapsed < 120) {
-            delay += (int) secureRandomBounded(151); // short burst tail: +0..150 ms
+        int64_t queuedDelay = lastProxyConnectTime > now ? lastProxyConnectTime - now : 0;
+        delay = (int) queuedDelay + 90 + (int) secureRandomBounded(161); // +90..250 ms per burst
+        if (delay > 900) {
+            delay = 900;
         }
         lastProxyConnectTime = now + delay;
     } else {
