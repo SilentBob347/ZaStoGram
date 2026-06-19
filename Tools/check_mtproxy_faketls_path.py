@@ -444,6 +444,24 @@ def main() -> int:
         "MTProxy startup diagnostics must cover connect, TLS handshake, connected, and disconnect",
     )
     require(
+        "mtProxyExtractSslipIpv4Address" in cpp
+        and '".sslip.io"' in cpp
+        and "mtproxy_startup resolved_sslip" in cpp,
+        "proxy host resolution must bypass DNS for literal x.x.x.x.sslip.io hosts",
+    )
+    require(
+        "mtProxySecretKindName" in cpp
+        and "secret_kind=%s" in cpp
+        and "is_faketls=%d" in cpp,
+        "MTProxy logs must classify secrets so JA4/FakeTLS diagnosis is limited to ee secrets",
+    )
+    require(
+        "mtProxyDisconnectReasonName" in cpp
+        and "reason_text=%s" in cpp
+        and "timeout_waiting_connect_or_pending_requests" in cpp,
+        "MTProxy disconnect logs must decode reason=2 as a timeout boundary",
+    )
+    require(
         "pendingTlsFrame" in combined
         and "sendPendingTlsFrame" in combined
         and "clearPendingTlsFrame" in combined,

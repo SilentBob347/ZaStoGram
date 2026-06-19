@@ -75,6 +75,8 @@ private:
 
     std::string currentSecret;
     std::string currentSecretDomain;
+    const char *currentSecretKind = "none";
+    bool currentSecretIsFakeTls = false;
     int32_t currentProxyTlsProfile = 0;
 
     bool tlsHashMismatch = false;

@@ -263,4 +263,8 @@
     <string name="RemindTodayAt">\'Отправить сегодня в\' HH:mm</string>
     <string name="RemindDayAt">\'Отправить\' d MMM \'в\' HH:mm</string>
     <string name="RemindDayYearAt">\'Напомнить\' d MMM yyyy \'в\' HH:mm</string>
+    <string name="ProxyStatusConnectingSlow">Подключаемся, это может занять время</string>
+    <string name="ProxyStatusCheckingConnection">Проверяем подключение...</string>
+    <string name="ProxyStatusNotRespondingNow">Сейчас не отвечает</string>
+    <string name="UseProxyTelegramInfoStealth">FakeTLS-секреты, которые начинаются с ee, используют браузерный TLS-профиль. Короткие dd/legacy-секреты работают как обычный MTProxy и не используют новую TLS-маскировку.</string>
 </resources>

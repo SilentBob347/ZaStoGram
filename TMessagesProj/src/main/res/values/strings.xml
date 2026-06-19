@@ -184,6 +184,9 @@
     <string name="Checking">Checking...</string>
     <string name="Available">Available</string>
     <string name="Unavailable">Unavailable</string>
+    <string name="ProxyStatusConnectingSlow">Connecting, this can take a moment</string>
+    <string name="ProxyStatusCheckingConnection">Checking connection...</string>
+    <string name="ProxyStatusNotRespondingNow">Not responding right now</string>
     <string name="ConnectingToProxy">Connecting to proxy</string>
     <string name="ConnectingToProxyWithDots">Connecting to proxy...</string>
     <string name="MenuProxyTitle">Proxy</string>
@@ -2685,6 +2688,7 @@
     <string name="UseProxyInfo">SOCKS5 proxy settings.</string>
     <string name="UseProxyTelegramInfo">MTProto proxy settings.</string>
     <string name="UseProxyTelegramInfo2">This proxy may display a sponsored channel in your chat list. This doesn\'t reveal any of your Telegram traffic.</string>
+    <string name="UseProxyTelegramInfoStealth">FakeTLS secrets that start with ee use the browser-like TLS profile. Short dd/legacy secrets work as ordinary MTProxy and do not use the new TLS disguise.</string>
     <string name="UseProxyForCalls">Use proxy for calls</string>
     <string name="UseProxyForCallsInfo">Proxy servers may degrade the quality of your calls.</string>
     <string name="ConnectingToProxyEnable">Enable</string>

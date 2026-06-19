@@ -67,6 +67,58 @@ static constexpr uint8_t MT_PROXY_TLS_RECORD_CHANGE_CIPHER_SPEC = 0x14;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_ALERT = 0x15;
 static constexpr uint8_t MT_PROXY_TLS_RECORD_APPLICATION_DATA = 0x17;
 
+static bool mtProxyExtractSslipIpv4Address(const std::string &host, struct in_addr *address, std::string *literalAddress) {
+    static const char suffix[] = ".sslip.io";
+    static const size_t suffixLength = sizeof(suffix) - 1;
+    if (host.size() <= suffixLength || host.compare(host.size() - suffixLength, suffixLength, suffix) != 0) {
+        return false;
+    }
+    std::string ipv4Address = host.substr(0, host.size() - suffixLength);
+    if (inet_pton(AF_INET, ipv4Address.c_str(), &address->s_addr) != 1) {
+        return false;
+    }
+    if (literalAddress != nullptr) {
+        *literalAddress = ipv4Address;
+    }
+    return true;
+}
+
+static const char *mtProxySecretKindName(const std::string &secret) {
+    if (secret.empty()) {
+        return "none";
+    }
+    if (secret.size() >= 17 && secret[0] == '\xdd') {
+        return "dd";
+    }
+    if (secret.size() > 17 && secret[0] == '\xee') {
+        return "ee";
+    }
+    return "legacy";
+}
+
+static const char *mtProxyDisconnectReasonName(int32_t reason) {
+    switch (reason) {
+        case 0:
+            return "drop";
+        case 1:
+            return "socket_error_or_eof";
+        case 2:
+            return "timeout_waiting_connect_or_pending_requests";
+        default:
+            return "unknown";
+    }
+}
+
+static const char *mtProxySocketErrorName(int32_t error) {
+    if (error == 0) {
+        return "none";
+    }
+    if (error < 0) {
+        return "internal";
+    }
+    return strerror(error);
+}
+
 struct MtProxyHandshakeQueuedRequest {
     ConnectionSocket *socket = nullptr;
     uint32_t generation = 0;
@@ -1401,6 +1453,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     adjustWriteOpAfterResolve = false;
     currentSecret = "";
     currentSecretDomain = "";
+    currentSecretKind = "none";
+    currentSecretIsFakeTls = false;
     currentProxyTlsProfile = normalizeMtProxyTlsProfile(MT_PROXY_TLS_PROFILE_ANDROID_CHROME);
     proxyHandshakeAdmissionKey = "";
     tlsState = 0;
@@ -1424,7 +1478,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     }
 
     if (!proxyAddress->empty()) {
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) connecting via proxy %s:%d secret[%d]", this, proxyAddress->c_str(), proxyPort, (int) proxySecret->size());
+        currentSecretKind = proxySecret->empty() ? "socks" : mtProxySecretKindName(*proxySecret);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) connecting via proxy %s:%d secret[%d] secret_kind=%s", this, proxyAddress->c_str(), proxyPort, (int) proxySecret->size(), currentSecretKind);
         if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) can't create proxy socket", this);
             closeSocket(1, -1);
@@ -1438,6 +1493,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             proxyAuthState = 10;
             currentSecret = proxySecret->substr(1, 16);
             currentSecretDomain = proxySecret->substr(17);
+            currentSecretIsFakeTls = true;
             currentProxyTlsProfile = normalizeMtProxyTlsProfile(proxyTlsProfile);
             proxyHandshakeAdmissionKey = *proxyAddress + ":" + std::to_string((unsigned int) proxyPort) + ":" + currentSecretDomain;
             tempBuffLength = 65 * 1024;
@@ -1470,6 +1526,14 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             } else {
                 ipv6 = true;
                 continueCheckAddress = false;
+            }
+            if (continueCheckAddress) {
+                std::string sslipAddress;
+                if (mtProxyExtractSslipIpv4Address(*proxyAddress, &socketAddress.sin_addr, &sslipAddress)) {
+                    ipv6 = false;
+                    continueCheckAddress = false;
+                    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup resolved_sslip host=%s address=%s", this, proxyAddress->c_str(), sslipAddress.c_str());
+                }
             }
             if (continueCheckAddress) {
 #ifdef USE_DELEGATE_HOST_RESOLVE
@@ -1521,10 +1585,12 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             }
         }
         uint32_t tempBuffLength;
+        currentSecretKind = mtProxySecretKindName(secret);
         if (secret.size() > 17 && secret[0] == '\xee') {
             proxyAuthState = 10;
             currentSecret = secret.substr(1, 16);
             currentSecretDomain = secret.substr(17);
+            currentSecretIsFakeTls = true;
             currentProxyTlsProfile = normalizeMtProxyTlsProfile(ConnectionsManager::getInstance(instanceNum).proxyTlsProfile);
             proxyHandshakeAdmissionKey = address + ":" + std::to_string((unsigned int) port) + ":" + currentSecretDomain;
             tempBuffLength = 65 * 1024;
@@ -1542,7 +1608,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         }
     }
 
-    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup connect_start proxy_state=%d domain_len=%d profile=%s address=%s port=%u", this, (int) proxyAuthState, (int) currentSecretDomain.size(), mtProxyTlsProfileName(currentProxyTlsProfile), currentAddress.c_str(), (unsigned int) currentPort);
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup connect_start proxy_state=%d secret_kind=%s is_faketls=%d domain_len=%d profile=%s address=%s port=%u", this, (int) proxyAuthState, currentSecretKind, currentSecretIsFakeTls ? 1 : 0, (int) currentSecretDomain.size(), mtProxyTlsProfileName(currentProxyTlsProfile), currentAddress.c_str(), (unsigned int) currentPort);
     openConnectionInternal(ipv6);
 }
 
@@ -1606,7 +1672,7 @@ int32_t ConnectionSocket::checkSocketError(int32_t *error) {
 
 void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
-    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d error=%d proxy_state=%d tls_state=%d bytes_read=%zu pending_hello=%u/%u pending=%u/%u first_tls_sent=%d first_tls_recv=%d", this, reason, error, (int) proxyAuthState, (int) tlsState, bytesRead, pendingClientHelloOffset, pendingClientHelloSize, pendingTlsFrameOffset, pendingTlsFrameSize, mtproxyFirstTlsFrameSentLogged ? 1 : 0, mtproxyFirstTlsDataReceivedLogged ? 1 : 0);
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d reason_text=%s error=%d error_text=%s secret_kind=%s is_faketls=%d proxy_state=%d tls_state=%d bytes_read=%zu pending_hello=%u/%u pending=%u/%u first_tls_sent=%d first_tls_recv=%d", this, reason, mtProxyDisconnectReasonName(reason), error, mtProxySocketErrorName(error), currentSecretKind, currentSecretIsFakeTls ? 1 : 0, (int) proxyAuthState, (int) tlsState, bytesRead, pendingClientHelloOffset, pendingClientHelloSize, pendingTlsFrameOffset, pendingTlsFrameSize, mtproxyFirstTlsFrameSentLogged ? 1 : 0, mtproxyFirstTlsDataReceivedLogged ? 1 : 0);
     releaseProxyHandshakeAdmission(false, "closeSocket");
     cancelProxyHandshakeAdmission();
     ConnectionsManager::getInstance(instanceNum).detachConnection(this);

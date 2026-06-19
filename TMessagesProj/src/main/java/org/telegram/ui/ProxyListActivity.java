@@ -22,7 +22,6 @@ import android.graphics.Canvas;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.graphics.drawable.Drawable;
-import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -44,6 +43,7 @@ import org.telegram.messenger.DownloadController;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
+import org.telegram.messenger.ProxyCheckScheduler;
 import org.telegram.messenger.ProxyRotationController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
@@ -194,11 +194,11 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     }
                 } else {
                     colorKey = Theme.key_windowBackgroundWhiteGrayText2;
-                    valueTextView.setText(getString(R.string.Connecting));
+                    valueTextView.setText(getString(R.string.ProxyStatusConnectingSlow));
                 }
             } else {
                 if (currentInfo.checking) {
-                    valueTextView.setText(getString(R.string.Checking));
+                    valueTextView.setText(getString(R.string.ProxyStatusCheckingConnection));
                     colorKey = Theme.key_windowBackgroundWhiteGrayText2;
                 } else if (currentInfo.available) {
                     if (currentInfo.ping != 0) {
@@ -208,8 +208,13 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     }
                     colorKey = Theme.key_windowBackgroundWhiteGreenText;
                 } else {
-                    valueTextView.setText(getString(R.string.Unavailable));
-                    colorKey = Theme.key_text_RedRegular;
+                    if (!TextUtils.isEmpty(currentInfo.secret)) {
+                        valueTextView.setText(getString(R.string.ProxyStatusNotRespondingNow));
+                        colorKey = Theme.key_windowBackgroundWhiteGrayText2;
+                    } else {
+                        valueTextView.setText(getString(R.string.Unavailable));
+                        colorKey = Theme.key_text_RedRegular;
+                    }
                 }
             }
             color = Theme.getColor(colorKey);
@@ -357,6 +362,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.proxySettingsChanged);
         NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.proxyCheckDone);
         NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.didUpdateConnectionState);
+        ProxyCheckScheduler.cancelOwner(this);
     }
 
     @Override
@@ -720,25 +726,15 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     }
 
     private void checkProxyList() {
-        for (int a = 0, count = proxyList.size(); a < count; a++) {
-            final SharedConfig.ProxyInfo proxyInfo = proxyList.get(a);
-            if (proxyInfo.checking || SystemClock.elapsedRealtime() - proxyInfo.availableCheckTime < 2 * 60 * 1000) {
-                continue;
+        ProxyCheckScheduler.enqueueStale(currentAccount, proxyList, this, new ProxyCheckScheduler.Callback() {
+            @Override
+            public void onProxyChecked(SharedConfig.ProxyInfo proxyInfo, long time) {
             }
-            proxyInfo.checking = true;
-            proxyInfo.proxyCheckPingId = ConnectionsManager.getInstance(currentAccount).checkProxy(proxyInfo.address, proxyInfo.port, proxyInfo.username, proxyInfo.password, proxyInfo.secret, time -> AndroidUtilities.runOnUIThread(() -> {
-                proxyInfo.availableCheckTime = SystemClock.elapsedRealtime();
-                proxyInfo.checking = false;
-                if (time == -1) {
-                    proxyInfo.available = false;
-                    proxyInfo.ping = 0;
-                } else {
-                    proxyInfo.ping = time;
-                    proxyInfo.available = true;
-                }
-                NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyCheckDone, proxyInfo);
-            }));
-        }
+
+            @Override
+            public void onProxyCheckQueueFinished() {
+            }
+        });
     }
 
     @Override

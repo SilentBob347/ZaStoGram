@@ -1,8 +1,6 @@
 package org.telegram.messenger;
 
 import android.content.SharedPreferences;
-import android.os.SystemClock;
-
 import org.telegram.tgnet.ConnectionsManager;
 
 import java.util.ArrayList;
@@ -19,33 +17,33 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
     );
 
     private boolean isCurrentlyChecking;
+    private final ProxyCheckScheduler.Callback rotationCheckCallback = new ProxyCheckScheduler.Callback() {
+        @Override
+        public void onProxyChecked(SharedConfig.ProxyInfo proxyInfo, long time) {
+            if (!SharedConfig.isProxyEnabled() || !SharedConfig.proxyRotationEnabled || !isCurrentlyChecking) {
+                return;
+            }
+            if (time != -1 && proxyInfo.available) {
+                switchToAvailable();
+            }
+        }
+
+        @Override
+        public void onProxyCheckQueueFinished() {
+            if (!isCurrentlyChecking) {
+                return;
+            }
+            switchToAvailable();
+        }
+    };
+
     private Runnable checkProxyAndSwitchRunnable = () -> {
         isCurrentlyChecking = true;
 
         int currentAccount = UserConfig.selectedAccount;
-        boolean startedCheck = false;
-        for (int i = 0; i < SharedConfig.proxyList.size(); i++) {
-            SharedConfig.ProxyInfo proxyInfo = SharedConfig.proxyList.get(i);
-            if (proxyInfo.checking || SystemClock.elapsedRealtime() - proxyInfo.availableCheckTime < 2 * 60 * 1000) {
-                continue;
-            }
-            startedCheck = true;
-            proxyInfo.checking = true;
-            proxyInfo.proxyCheckPingId = ConnectionsManager.getInstance(currentAccount).checkProxy(proxyInfo.address, proxyInfo.port, proxyInfo.username, proxyInfo.password, proxyInfo.secret, time -> AndroidUtilities.runOnUIThread(() -> {
-                proxyInfo.availableCheckTime = SystemClock.elapsedRealtime();
-                proxyInfo.checking = false;
-                if (time == -1) {
-                    proxyInfo.available = false;
-                    proxyInfo.ping = 0;
-                } else {
-                    proxyInfo.ping = time;
-                    proxyInfo.available = true;
-                }
-                NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyCheckDone, proxyInfo);
-            }));
-        }
+        int startedCheck = ProxyCheckScheduler.enqueueStale(currentAccount, SharedConfig.proxyList, this, rotationCheckCallback);
 
-        if (!startedCheck) {
+        if (startedCheck == 0) {
             isCurrentlyChecking = false;
             switchToAvailable();
         }
@@ -106,11 +104,16 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
                 return;
             }
 
-            switchToAvailable();
+            SharedConfig.ProxyInfo proxyInfo = args.length > 0 && args[0] instanceof SharedConfig.ProxyInfo ? (SharedConfig.ProxyInfo) args[0] : null;
+            if (proxyInfo != null && proxyInfo.available) {
+                switchToAvailable();
+            }
         } else if (id == NotificationCenter.proxySettingsChanged) {
             AndroidUtilities.cancelRunOnUIThread(checkProxyAndSwitchRunnable);
+            ProxyCheckScheduler.cancelOwner(this);
+            isCurrentlyChecking = false;
         } else if (id == NotificationCenter.didUpdateConnectionState && account == UserConfig.selectedAccount) {
-            if (!SharedConfig.isProxyEnabled() && !SharedConfig.proxyRotationEnabled || SharedConfig.proxyList.size() <= 1) {
+            if (!SharedConfig.isProxyEnabled() || !SharedConfig.proxyRotationEnabled || SharedConfig.proxyList.size() <= 1) {
                 return;
             }
 
@@ -122,6 +125,8 @@ public class ProxyRotationController implements NotificationCenter.NotificationC
                 }
             } else {
                 AndroidUtilities.cancelRunOnUIThread(checkProxyAndSwitchRunnable);
+                ProxyCheckScheduler.cancelOwner(this);
+                isCurrentlyChecking = false;
             }
         }
     }
