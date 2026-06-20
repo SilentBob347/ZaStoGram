@@ -196,6 +196,10 @@
     <string name="ProxyStatusDroppedAfterAppData">Connected, then dropped after first data</string>
     <string name="ProxyStatusCancelled">Check cancelled</string>
     <string name="ProxyStatusUnknownFail">Check failed: phase unknown</string>
+    <string name="ProxyWindowStatusDisabled">Proxy disabled</string>
+    <string name="ProxyWindowStatusNoProxy">No proxy selected</string>
+    <string name="ProxyWindowStatusReady">Proxy connected</string>
+    <string name="ProxyWindowStatusChecking">Checking proxy route...</string>
     <string name="ConnectingToProxy">Connecting to proxy</string>
     <string name="ConnectingToProxyWithDots">Connecting to proxy...</string>
     <string name="MenuProxyTitle">Proxy</string>

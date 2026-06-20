@@ -62,7 +62,7 @@ public class ProxyCheckDiagnostics {
                 return LocaleController.getString(R.string.Connected);
             }
             if (hasFreshFailure(proxyInfo)) {
-                return diagnosticText(proxyInfo.lastCheckDiagnostic);
+                return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
             }
             return LocaleController.getString(R.string.ProxyStatusConnectingSlow);
         }
@@ -76,12 +76,38 @@ public class ProxyCheckDiagnostics {
             return LocaleController.getString(R.string.Available);
         }
         if (hasFreshFailure(proxyInfo)) {
-            return diagnosticText(proxyInfo.lastCheckDiagnostic);
+            return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
         if (!TextUtils.isEmpty(proxyInfo.secret)) {
             return LocaleController.getString(R.string.ProxyStatusNotRespondingNow);
         }
         return LocaleController.getString(R.string.Unavailable);
+    }
+
+    public static String headerStatusText(SharedConfig.ProxyInfo proxyInfo, boolean proxyEnabled, int currentConnectionState) {
+        if (!proxyEnabled) {
+            return LocaleController.getString(R.string.ProxyWindowStatusDisabled);
+        }
+        if (proxyInfo == null) {
+            return LocaleController.getString(R.string.ProxyWindowStatusNoProxy);
+        }
+        if (currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating) {
+            if (proxyInfo.ping != 0) {
+                return LocaleController.getString(R.string.ProxyWindowStatusReady) + ", " + LocaleController.formatString("Ping", R.string.Ping, proxyInfo.ping);
+            }
+            return LocaleController.getString(R.string.ProxyWindowStatusReady);
+        }
+        if (proxyInfo.checking) {
+            return LocaleController.getString(R.string.ProxyWindowStatusChecking);
+        }
+        if (hasFreshFailure(proxyInfo)) {
+            return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+        }
+        return LocaleController.getString(R.string.ProxyStatusConnectingSlow);
+    }
+
+    public static String shortDiagnosticText(String diagnostic) {
+        return diagnosticText(diagnostic);
     }
 
     public static int statusColorKey(SharedConfig.ProxyInfo proxyInfo, boolean currentProxyEnabled, int currentConnectionState) {

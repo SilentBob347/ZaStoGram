@@ -11,6 +11,7 @@ import android.os.SystemClock;
 import org.telegram.tgnet.ConnectionsManager;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 
@@ -18,8 +19,12 @@ public class ProxyCheckScheduler {
 
     private static final long PROXY_CHECK_STALE_MS = 2 * 60 * 1000L;
     private static final long PROXY_CHECK_SPACING_MS = 700L;
+    private static final long PROXY_CHECK_FAILURE_BACKOFF_MS = 2 * 60 * 1000L;
+    private static final long PROXY_CHECK_FAILURE_BACKOFF_MAX_MS = 8 * 60 * 1000L;
+    private static final long PROXY_CHECK_CONNECTED_GRACE_MS = 60 * 1000L;
 
     private static final ArrayList<Request> queue = new ArrayList<>();
+    private static final HashMap<String, EndpointState> endpointStates = new HashMap<>();
     private static final Runnable startNextRunnable = ProxyCheckScheduler::startNext;
     private static Request activeRequest;
 
@@ -60,7 +65,7 @@ public class ProxyCheckScheduler {
                 continue;
             }
             clearDetachedCheckState(proxyInfo, "enqueue");
-            if (!shouldCheck(proxyInfo)) {
+            if (!shouldCheck(proxyInfo, false)) {
                 continue;
             }
             queue.add(new Request(currentAccount, proxyInfo, owner, callback));
@@ -120,14 +125,23 @@ public class ProxyCheckScheduler {
         return false;
     }
 
-    private static boolean shouldCheck(SharedConfig.ProxyInfo proxyInfo) {
-        return shouldCheck(proxyInfo, false);
-    }
-
     private static boolean shouldCheck(SharedConfig.ProxyInfo proxyInfo, boolean force) {
-        return proxyInfo != null
-                && !proxyInfo.checking
-                && (force || !isFresh(proxyInfo));
+        if (proxyInfo == null || proxyInfo.checking) {
+            return false;
+        }
+        if (force) {
+            return true;
+        }
+        long now = SystemClock.elapsedRealtime();
+        long nextAllowedTime = nextAllowedCheckTime(proxyInfo);
+        if (nextAllowedTime > now) {
+            log("skip_backoff endpoint=" + endpoint(proxyInfo) + " wait_ms=" + (nextAllowedTime - now) + " phase=" + lastEndpointDiagnostic(proxyInfo));
+            return false;
+        }
+        if (isFresh(proxyInfo)) {
+            return false;
+        }
+        return true;
     }
 
     public static boolean isFresh(SharedConfig.ProxyInfo proxyInfo) {
@@ -145,6 +159,7 @@ public class ProxyCheckScheduler {
         proxyInfo.availableCheckTime = SystemClock.elapsedRealtime();
         proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.OK;
         proxyInfo.lastCheckDiagnosticTime = proxyInfo.availableCheckTime;
+        rememberConnected(proxyInfo);
         clearTransientState(proxyInfo);
         if (changed) {
             log("mark_connected endpoint=" + endpoint(proxyInfo));
@@ -230,6 +245,7 @@ public class ProxyCheckScheduler {
         long callbackTime = callbackTimeForResult(request, time);
         String appliedDiagnostic = shouldPreserveConnectedState(request, time) ? ProxyCheckDiagnostics.OK : normalizedDiagnostic;
         log("finish result=" + (callbackTime == -1 ? "fail" : "ok") + " phase=" + normalizedDiagnostic + " diagnostic=" + normalizedDiagnostic + " time=" + callbackTime + " applied_time=" + appliedTime + " raw_time=" + time + " endpoint=" + endpoint(request.proxyInfo) + " queued=" + queue.size() + " cancelled=" + request.cancelled + " listeners=" + request.activeListenerCount());
+        rememberCheckResult(request, callbackTime, normalizedDiagnostic);
         for (int i = 0, count = request.listeners.size(); i < count; i++) {
             Listener listener = request.listeners.get(i);
             if (listener.cancelled) {
@@ -277,6 +293,71 @@ public class ProxyCheckScheduler {
         }
         int state = ConnectionsManager.getInstance(currentAccount).getConnectionState();
         return state == ConnectionsManager.ConnectionStateConnected || state == ConnectionsManager.ConnectionStateUpdating;
+    }
+
+    private static long nextAllowedCheckTime(SharedConfig.ProxyInfo proxyInfo) {
+        String key = endpointKey(proxyInfo);
+        if (key == null) {
+            return 0;
+        }
+        EndpointState state = endpointStates.get(key);
+        return state == null ? 0 : state.nextCheckTime;
+    }
+
+    private static String lastEndpointDiagnostic(SharedConfig.ProxyInfo proxyInfo) {
+        String key = endpointKey(proxyInfo);
+        if (key == null) {
+            return ProxyCheckDiagnostics.UNKNOWN_FAIL;
+        }
+        EndpointState state = endpointStates.get(key);
+        if (state == null) {
+            return ProxyCheckDiagnostics.normalize(proxyInfo.lastCheckDiagnostic);
+        }
+        return state.lastDiagnostic;
+    }
+
+    private static void rememberConnected(SharedConfig.ProxyInfo proxyInfo) {
+        String key = endpointKey(proxyInfo);
+        if (key == null) {
+            return;
+        }
+        EndpointState state = endpointStateForKey(key);
+        long now = SystemClock.elapsedRealtime();
+        state.consecutiveFailures = 0;
+        state.lastDiagnostic = ProxyCheckDiagnostics.OK;
+        state.lastCheckTime = now;
+        state.nextCheckTime = now + PROXY_CHECK_CONNECTED_GRACE_MS;
+    }
+
+    private static void rememberCheckResult(Request request, long time, String diagnostic) {
+        String key = endpointKey(request.proxyInfo);
+        if (key == null) {
+            return;
+        }
+        EndpointState state = endpointStateForKey(key);
+        long now = SystemClock.elapsedRealtime();
+        state.lastDiagnostic = ProxyCheckDiagnostics.normalize(diagnostic);
+        state.lastCheckTime = now;
+        if (time != -1 || isConnectedCurrentProxy(request.currentAccount, request.proxyInfo)) {
+            state.consecutiveFailures = 0;
+            state.nextCheckTime = now + PROXY_CHECK_CONNECTED_GRACE_MS;
+            return;
+        }
+
+        state.consecutiveFailures++;
+        long multiplier = 1L << Math.min(2, Math.max(0, state.consecutiveFailures - 1));
+        long backoff = Math.min(PROXY_CHECK_FAILURE_BACKOFF_MAX_MS, PROXY_CHECK_FAILURE_BACKOFF_MS * multiplier);
+        state.nextCheckTime = now + backoff;
+        log("backoff endpoint=" + endpoint(request.proxyInfo) + " wait_ms=" + backoff + " failures=" + state.consecutiveFailures + " phase=" + state.lastDiagnostic);
+    }
+
+    private static EndpointState endpointStateForKey(String key) {
+        EndpointState state = endpointStates.get(key);
+        if (state == null) {
+            state = new EndpointState();
+            endpointStates.put(key, state);
+        }
+        return state;
     }
 
     private static void notifyRequestFinishedIfDrained(Request request) {
@@ -485,6 +566,13 @@ public class ProxyCheckScheduler {
                 }
             }
         }
+    }
+
+    private static class EndpointState {
+        long nextCheckTime;
+        long lastCheckTime;
+        int consecutiveFailures;
+        String lastDiagnostic = ProxyCheckDiagnostics.UNKNOWN_FAIL;
     }
 
     private static class Listener {

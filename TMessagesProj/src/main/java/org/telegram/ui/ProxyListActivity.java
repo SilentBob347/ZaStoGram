@@ -375,6 +375,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         actionBar.setBackButtonDrawable(new BackDrawable(false));
         actionBar.setAllowOverlayTitle(true);
         actionBar.setTitle(getString(R.string.ProxySettings));
+        updateProxyActionBarStatus();
         if (parentLayout != null && parentLayout.isLayersLayout()) {
             actionBar.setOccupyStatusBar(false);
         }
@@ -844,19 +845,33 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
             deleteAllRow = -1;
         }
         checkProxyList();
+        updateProxyActionBarStatus();
         if (notify && listAdapter != null) {
             listAdapter.notifyDataSetChanged();
         }
     }
 
+    private void updateProxyActionBarStatus() {
+        if (actionBar == null) {
+            return;
+        }
+        actionBar.setSubtitle(ProxyCheckDiagnostics.headerStatusText(SharedConfig.currentProxy, useProxySettings, currentConnectionState));
+    }
+
     private void checkProxyList() {
+        if (ProxyCheckScheduler.hasOwnerPending(this)) {
+            updateProxyActionBarStatus();
+            return;
+        }
         ProxyCheckScheduler.enqueueStale(currentAccount, proxyList, this, new ProxyCheckScheduler.Callback() {
             @Override
             public void onProxyChecked(SharedConfig.ProxyInfo proxyInfo, long time, String diagnostic) {
+                updateProxyActionBarStatus();
             }
 
             @Override
             public void onProxyCheckQueueFinished() {
+                updateProxyActionBarStatus();
             }
         });
     }
@@ -879,6 +894,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     public void onResume() {
         super.onResume();
         markConnectedCurrentProxyIfNeeded();
+        updateProxyActionBarStatus();
         if (listAdapter != null) {
             listAdapter.notifyDataSetChanged();
         }
@@ -897,13 +913,16 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
             });
 
             updateRows(false);
+            updateProxyActionBarStatus();
         } else if (id == NotificationCenter.proxySettingsChanged) {
             updateRows(true);
+            updateProxyActionBarStatus();
         } else if (id == NotificationCenter.didUpdateConnectionState) {
             int state = ConnectionsManager.getInstance(account).getConnectionState();
             if (currentConnectionState != state) {
                 currentConnectionState = state;
                 markConnectedCurrentProxyIfNeeded();
+                updateProxyActionBarStatus();
                 if (listView != null && SharedConfig.currentProxy != null) {
                     int idx = proxyList.indexOf(SharedConfig.currentProxy);
                     if (idx >= 0) {
@@ -930,6 +949,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                         cell.updateStatus();
                     }
                 }
+                updateProxyActionBarStatus();
 
                 boolean checking = false;
                 if (!wasCheckedAllList) {

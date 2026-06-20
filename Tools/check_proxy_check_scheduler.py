@@ -12,12 +12,19 @@ JAVA_MANAGER = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/Connection
 
 checks = [
     (SCHEDULER, "PROXY_CHECK_SPACING_MS", "scheduler must space background proxy checks"),
+    (SCHEDULER, "PROXY_CHECK_FAILURE_BACKOFF_MS", "scheduler must back off repeated failed endpoint checks"),
+    (SCHEDULER, "PROXY_CHECK_CONNECTED_GRACE_MS", "scheduler must avoid rechecking a recently connected endpoint"),
     (SCHEDULER, "activeRequest", "scheduler must keep a single active background check"),
+    (SCHEDULER, "EndpointState", "scheduler must keep per-endpoint check state outside mutable ProxyInfo rows"),
+    (SCHEDULER, "endpointStates", "scheduler must remember endpoint cooldowns across UI/rotation sweeps"),
     (SCHEDULER, "enqueueStale", "scheduler must expose stale-check enqueueing"),
     (SCHEDULER, "enqueueNow", "scheduler must expose priority manual checks so GUI does not bypass the shared queue"),
     (SCHEDULER, "owner == null", "scheduler must reject ownerless checks because they cannot be cancelled or drained reliably"),
     (SCHEDULER, "isFresh", "scheduler must expose one freshness policy for UI and rotation"),
     (SCHEDULER, "markConnected", "scheduler must expose a single path for real connected-state observations"),
+    (SCHEDULER, "nextAllowedCheckTime", "scheduler must expose a single debounce policy for UI and rotation"),
+    (SCHEDULER, "rememberCheckResult", "scheduler must update endpoint cooldowns from measured check results"),
+    (SCHEDULER, "skip_backoff", "scheduler must log when a repeated endpoint check is intentionally suppressed"),
     (SCHEDULER, "endpointKey", "scheduler must deduplicate checks by proxy endpoint, not ProxyInfo object identity"),
     (SCHEDULER, "toLowerCase(Locale.US)", "scheduler endpoint key must normalize host names without device-locale surprises"),
     (SCHEDULER, "normalizeKeyPart", "scheduler endpoint key must handle null endpoint fields before lowercasing"),
@@ -50,6 +57,7 @@ checks = [
     (SCHEDULER, "proxyInfo.proxyCheckPingId == 0", "scheduler must fail fast if native checkProxy refuses to start"),
     (SCHEDULER, "force", "scheduler must support forced manual checks without abusing stale-cache state"),
     (PROXY_LIST, "ProxyCheckScheduler.enqueueStale", "proxy list must use the shared scheduler"),
+    (PROXY_LIST, "ProxyCheckScheduler.hasOwnerPending(this)", "proxy list must not start another full sweep while its previous sweep is still pending"),
     (PROXY_LIST, "ProxyCheckScheduler.isFresh", "proxy list must use the shared freshness policy"),
     (PROXY_LIST, "markConnectedCurrentProxyIfNeeded", "proxy list must mark connected-state observations outside cell rendering"),
     (PROXY_LIST, "ProxyCheckScheduler.cancelOwner(this)", "proxy list must cancel queued checks on destroy"),
@@ -170,7 +178,7 @@ enqueue_stale_body = scheduler_text[enqueue_stale_start:enqueue_stale_end]
 ordered_needles = [
     "attachPending(proxyInfo, owner, callback, false)",
     "clearDetachedCheckState(proxyInfo, \"enqueue\")",
-    "shouldCheck(proxyInfo)",
+    "shouldCheck(proxyInfo, false)",
 ]
 last_index = -1
 for needle in ordered_needles:
@@ -180,6 +188,27 @@ for needle in ordered_needles:
         print(f" - {SCHEDULER.relative_to(ROOT)}: enqueueStale must attach to active endpoint checks before deciding a ProxyInfo is already checking")
         sys.exit(1)
     last_index = needle_index
+
+if "shouldCheck(proxyInfo, false)" not in enqueue_stale_body:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: background sweeps must use cooldown-aware non-forced checks")
+    sys.exit(1)
+if "shouldCheck(request.proxyInfo, request.force)" not in scheduler_text:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: queued starts must re-check cooldown before opening native sockets")
+    sys.exit(1)
+if "rememberCheckResult(request, callbackTime, normalizedDiagnostic);" not in scheduler_text:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: finishRequest must update endpoint backoff before listener fan-out")
+    sys.exit(1)
+if "rememberCheckResult(request, callbackTime, normalizedDiagnostic);" in scheduler_text:
+    finish_start = scheduler_text.find("private static void finishRequest(")
+    remember_index = scheduler_text.find("rememberCheckResult(request, callbackTime, normalizedDiagnostic);", finish_start)
+    fanout_index = scheduler_text.find("for (int i = 0, count = request.listeners.size();", finish_start)
+    if remember_index == -1 or fanout_index == -1 or remember_index > fanout_index:
+        print("Proxy check scheduler guard failed:")
+        print(f" - {SCHEDULER.relative_to(ROOT)}: endpoint backoff must be updated before notifying GUI listeners")
+        sys.exit(1)
 
 rotation_text = ROTATION.read_text(encoding="utf-8")
 

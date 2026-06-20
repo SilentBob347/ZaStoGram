@@ -275,6 +275,10 @@
     <string name="ProxyStatusDroppedAfterAppData">Подключился и отвалился после первых данных</string>
     <string name="ProxyStatusCancelled">Проверка отменена</string>
     <string name="ProxyStatusUnknownFail">Проверка не прошла: фаза неизвестна</string>
+    <string name="ProxyWindowStatusDisabled">Прокси выключен</string>
+    <string name="ProxyWindowStatusNoProxy">Прокси не выбран</string>
+    <string name="ProxyWindowStatusReady">Прокси подключён</string>
+    <string name="ProxyWindowStatusChecking">Проверяем маршрут прокси...</string>
     <string name="UseProxyTelegramInfoStealth">FakeTLS-секреты, которые начинаются с ee, используют браузерный TLS-профиль. Короткие dd/legacy-секреты работают как обычный MTProxy и не используют новую TLS-маскировку.</string>
     <string name="MtProxyClientHelloFragmentation">Мягкая фрагментация ClientHello</string>
     <string name="MtProxyClientHelloFragmentationInfo">Делит только FakeTLS ClientHello на небольшие TCP-отправки. MTProto-трафик после подключения не меняется.</string>
