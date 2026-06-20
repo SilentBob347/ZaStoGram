@@ -318,6 +318,10 @@ public class SharedConfig {
     public static boolean proxyRotationEnabled;
     public static int proxyRotationTimeout;
     public static boolean mtProxyClientHelloFragmentation;
+    public static boolean mtProxySoftMux = true;
+    public static boolean mtProxyHandshakeAdmission;
+    public static int mtProxyRecordSizingMode;
+    public static int mtProxyTimingMode;
     public static int messageSeenHintCount;
     public static int emojiInteractionsHintCount;
     public static int dayNightThemeSwitchHintCount;
@@ -468,6 +472,10 @@ public class SharedConfig {
                 editor.putBoolean("proxyRotationEnabled", proxyRotationEnabled);
                 editor.putInt("proxyRotationTimeout", proxyRotationTimeout);
                 editor.putBoolean("mtProxyClientHelloFragmentation", mtProxyClientHelloFragmentation);
+                editor.putBoolean("mtProxySoftMux", mtProxySoftMux);
+                editor.putBoolean("mtProxyHandshakeAdmission", mtProxyHandshakeAdmission);
+                editor.putInt("mtProxyRecordSizingMode", mtProxyRecordSizingMode);
+                editor.putInt("mtProxyTimingMode", mtProxyTimingMode);
 
                 if (pendingAppUpdate != null) {
                     try {
@@ -536,6 +544,10 @@ public class SharedConfig {
             proxyRotationEnabled = preferences.getBoolean("proxyRotationEnabled", false);
             proxyRotationTimeout = preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX);
             mtProxyClientHelloFragmentation = preferences.getBoolean("mtProxyClientHelloFragmentation", false);
+            mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", true);
+            mtProxyHandshakeAdmission = preferences.getBoolean("mtProxyHandshakeAdmission", false);
+            mtProxyRecordSizingMode = preferences.getInt("mtProxyRecordSizingMode", 0);
+            mtProxyTimingMode = preferences.getInt("mtProxyTimingMode", 0);
             String authKeyString = preferences.getString("pushAuthKey", null);
             if (!TextUtils.isEmpty(authKeyString)) {
                 pushAuthKey = Base64.decode(authKeyString, Base64.DEFAULT);

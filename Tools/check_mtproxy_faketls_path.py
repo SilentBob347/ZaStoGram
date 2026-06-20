@@ -242,29 +242,29 @@ def main() -> int:
         "Java must choose a sticky profile from endpoint, secret, and local salt",
     )
     require(
-        "native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, mtProxyTlsProfile, mtProxyClientHelloFragmentation)" in java
-        and "native_setProxySettings(a, address, port, username, password, secret, mtProxyTlsProfile, mtProxyClientHelloFragmentation)" in java,
+        "native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyHandshakeAdmission)" in java
+        and "native_setProxySettings(a, address, port, username, password, secret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyHandshakeAdmission)" in java,
         "Java must pass the selected MTProxy TLS profile into native proxy settings",
     )
     require(
-        "native_checkProxy(currentAccount, address, port, username, password, secret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, requestTimeDelegate)" in java,
+        "native_checkProxy(currentAccount, address, port, username, password, secret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyHandshakeAdmission, requestTimeDelegate)" in java,
         "Java proxy checks must use the same selected MTProxy TLS profile as real connections",
     )
     require(
-        "native_setProxySettings(int currentAccount, String address, int port, String username, String password, String secret, int mtProxyTlsProfile, int mtProxyClientHelloFragmentation)" in java,
+        "native_setProxySettings(int currentAccount, String address, int port, String username, String password, String secret, int mtProxyTlsProfile, int mtProxyClientHelloFragmentation, int mtProxyHandshakeAdmission)" in java,
         "Java native_setProxySettings declaration must include the MTProxy TLS profile",
     )
     require(
-        'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;II)V"' in wrapper,
+        'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;III)V"' in wrapper,
         "JNI native_setProxySettings signature must include the MTProxy TLS profile int",
     )
     require(
-        'native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IILorg/telegram/tgnet/RequestTimeDelegate;)J"' in wrapper,
+        'native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIILorg/telegram/tgnet/RequestTimeDelegate;)J"' in wrapper,
         "JNI native_checkProxy signature must include the MTProxy TLS profile int",
     )
     require(
-        "setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation)" in manager_header
-        and "ConnectionsManager::setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation)" in manager_cpp,
+        "setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyHandshakeAdmission)" in manager_header
+        and "ConnectionsManager::setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyHandshakeAdmission)" in manager_cpp,
         "ConnectionsManager::setProxySettings must store the MTProxy TLS profile",
     )
     require(
@@ -358,9 +358,10 @@ def main() -> int:
         "proxy startup scheduling must use a cancellable nonblocking Timer",
     )
     require(
-        "MT_PROXY_HANDSHAKE_ADMISSION_ENABLED = false" in cpp
+        "MT_PROXY_HANDSHAKE_ADMISSION_ENABLED" not in cpp
+        and "proxyHandshakeAdmission == 0" in cpp
         and "admission_disabled" in cpp,
-        "FakeTLS endpoint admission controller must stay disabled in this diagnostic build",
+        "FakeTLS endpoint admission controller must be controlled by the runtime proxy setting",
     )
     require(
         "MtProxyHandshakeEndpointState" in cpp

@@ -9,8 +9,12 @@ CONNECTIONS_JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/Connec
 PROXY_LIST = ROOT / "TMessagesProj/src/main/java/org/telegram/ui/ProxyListActivity.java"
 FILE_LOAD = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/FileLoadOperation.java"
 FILE_UPLOAD = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/FileUploadOperation.java"
+SHARED_CONFIG = ROOT / "TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java"
 SOCKET_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.cpp"
 SOCKET_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionSocket.h"
+MANAGER_CPP = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.cpp"
+MANAGER_H = ROOT / "TMessagesProj/jni/tgnet/ConnectionsManager.h"
+WRAPPER_CPP = ROOT / "TMessagesProj/jni/TgNetWrapper.cpp"
 STRINGS = ROOT / "TMessagesProj/src/main/res/values/strings.xml"
 STRINGS_RU = ROOT / "TMessagesProj/src/main/res/values-ru/strings.xml"
 
@@ -30,8 +34,12 @@ def main() -> None:
     proxy_list = text(PROXY_LIST)
     file_load = text(FILE_LOAD)
     file_upload = text(FILE_UPLOAD)
+    shared_config = text(SHARED_CONFIG)
     socket_cpp = text(SOCKET_CPP)
     socket_h = text(SOCKET_H)
+    manager_cpp = text(MANAGER_CPP)
+    manager_h = text(MANAGER_H)
+    wrapper_cpp = text(WRAPPER_CPP)
 
     require(
         "MT_PROXY_TLS_PROFILE_AUTO_ROTATE" in connections,
@@ -76,8 +84,20 @@ def main() -> None:
     require(
         "getMtProxySoftMuxDownloadConnectionType" in connections
         and "getMtProxySoftMuxUploadConnectionType" in connections
-        and "isMtProxyActiveForSoftMux" in connections,
-        "ConnectionsManager must expose a soft mux connection-slot policy for MTProxy",
+        and "isMtProxySoftMuxEnabled" in connections,
+        "ConnectionsManager must expose a runtime soft mux connection-slot policy for MTProxy",
+    )
+    require(
+        "mtProxySoftMux" in shared_config
+        and 'getBoolean("mtProxySoftMux", true)' in shared_config
+        and 'putBoolean("mtProxySoftMux", mtProxySoftMux)' in shared_config,
+        "SharedConfig must persist soft mux as an enabled-by-default runtime setting",
+    )
+    require(
+        "mtProxySoftMuxRow" in proxy_list
+        and "MtProxySoftMux" in proxy_list
+        and "SharedConfig.mtProxySoftMux" in proxy_list,
+        "proxy settings UI must expose a soft mux toggle",
     )
     require(
         "getMtProxySoftMuxDownloadConnectionType(i)" in file_load
@@ -88,11 +108,57 @@ def main() -> None:
         "getMtProxySoftMuxUploadConnectionType(requestNumFinal)" in file_upload,
         "FileUploadOperation must use the MTProxy soft mux policy for upload slots",
     )
+    require(
+        "mtProxyHandshakeAdmission" in shared_config
+        and 'getBoolean("mtProxyHandshakeAdmission", false)' in shared_config
+        and 'putBoolean("mtProxyHandshakeAdmission", mtProxyHandshakeAdmission)' in shared_config,
+        "SharedConfig must persist admission-controller as a disabled-by-default runtime setting",
+    )
+    require(
+        "mtProxyHandshakeAdmissionRow" in proxy_list
+        and "MtProxyHandshakeAdmission" in proxy_list
+        and "SharedConfig.mtProxyHandshakeAdmission" in proxy_list,
+        "proxy settings UI must expose an admission-controller toggle",
+    )
+    require(
+        "resolveMtProxyHandshakeAdmissionMode()" in connections
+        and "mtProxyHandshakeAdmission" in connections
+        and "native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyHandshakeAdmission)" in connections,
+        "Java must pass the runtime admission-controller setting into native proxy settings",
+    )
+    require(
+        'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;III)V"' in wrapper_cpp
+        and 'native_checkProxy", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIILorg/telegram/tgnet/RequestTimeDelegate;)J"' in wrapper_cpp,
+        "JNI signatures must carry the admission-controller integer",
+    )
+    require(
+        "int32_t proxyHandshakeAdmission = 0" in manager_h
+        and "handshakeAdmissionChanged" in manager_cpp
+        and "proxyHandshakeAdmission = normalizeMtProxyHandshakeAdmission" in manager_cpp,
+        "native ConnectionsManager must store admission-controller runtime state and reconnect when it changes",
+    )
+    require(
+        "MT_PROXY_HANDSHAKE_ADMISSION_ENABLED" not in socket_cpp
+        and "proxyHandshakeAdmission == 0" in socket_cpp
+        and "admission_disabled" in socket_cpp,
+        "ConnectionSocket must use runtime admission state instead of a compile-time disabled flag",
+    )
+    require(
+        "if (ConnectionsManager::getInstance(instanceNum).proxyHandshakeAdmission != 0) {\n        hasNextRequest = mtProxyTakeNextQueuedRequestLocked" in socket_cpp,
+        "ConnectionSocket must not grant queued admission requests after the runtime gate is disabled",
+    )
     for path in (STRINGS, STRINGS_RU):
         source = text(path)
         require(
             'name="MtProxyTlsProfileAutoRotate"' in source,
             f"{path.name} must define MtProxyTlsProfileAutoRotate",
+        )
+        require(
+            'name="MtProxySoftMux"' in source
+            and 'name="MtProxySoftMuxInfo"' in source
+            and 'name="MtProxyHandshakeAdmission"' in source
+            and 'name="MtProxyHandshakeAdmissionInfo"' in source,
+            f"{path.name} must define soft mux and admission-controller strings",
         )
 
     print("MTProxy rotation and soft mux guard passed.")

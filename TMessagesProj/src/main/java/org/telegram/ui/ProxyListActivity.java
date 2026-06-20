@@ -86,6 +86,16 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
             ConnectionsManager.MT_PROXY_TLS_PROFILE_ANDROID_OKHTTP,
             ConnectionsManager.MT_PROXY_TLS_PROFILE_FIREFOX,
     };
+    private static final int[] MT_PROXY_RECORD_SIZING_OPTIONS = new int[] {
+            ConnectionsManager.MT_PROXY_RECORD_SIZING_OFF,
+            ConnectionsManager.MT_PROXY_RECORD_SIZING_CONSERVATIVE,
+            ConnectionsManager.MT_PROXY_RECORD_SIZING_VARIED,
+    };
+    private static final int[] MT_PROXY_TIMING_OPTIONS = new int[] {
+            ConnectionsManager.MT_PROXY_TIMING_OFF,
+            ConnectionsManager.MT_PROXY_TIMING_GENTLE,
+            ConnectionsManager.MT_PROXY_TIMING_BALANCED,
+    };
 
     private ListAdapter listAdapter;
     private RecyclerListView listView;
@@ -116,6 +126,14 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     private int tlsProfileInfoRow;
     private int clientHelloFragmentationRow;
     private int clientHelloFragmentationInfoRow;
+    private int mtProxySoftMuxRow;
+    private int mtProxySoftMuxInfoRow;
+    private int mtProxyHandshakeAdmissionRow;
+    private int mtProxyHandshakeAdmissionInfoRow;
+    private int mtProxyRecordSizingRow;
+    private int mtProxyRecordSizingInfoRow;
+    private int mtProxyTimingRow;
+    private int mtProxyTimingInfoRow;
     private int callsDetailRow;
     private int deleteAllRow;
 
@@ -444,9 +462,19 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 TextCheckCell textCheckCell = (TextCheckCell) view;
                 textCheckCell.setChecked(SharedConfig.mtProxyClientHelloFragmentation);
                 SharedConfig.saveConfig();
-                if (useProxySettings && SharedConfig.currentProxy != null) {
-                    ConnectionsManager.setProxySettings(true, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret);
-                }
+                reapplyCurrentProxySettings();
+            } else if (position == mtProxySoftMuxRow) {
+                SharedConfig.mtProxySoftMux = !SharedConfig.mtProxySoftMux;
+                TextCheckCell textCheckCell = (TextCheckCell) view;
+                textCheckCell.setChecked(SharedConfig.mtProxySoftMux);
+                SharedConfig.saveConfig();
+                reapplyCurrentProxySettings();
+            } else if (position == mtProxyHandshakeAdmissionRow) {
+                SharedConfig.mtProxyHandshakeAdmission = !SharedConfig.mtProxyHandshakeAdmission;
+                TextCheckCell textCheckCell = (TextCheckCell) view;
+                textCheckCell.setChecked(SharedConfig.mtProxyHandshakeAdmission);
+                SharedConfig.saveConfig();
+                reapplyCurrentProxySettings();
             } else if (position == callsRow) {
                 useProxyForCalls = !useProxyForCalls;
                 TextCheckCell textCheckCell = (TextCheckCell) view;
@@ -630,6 +658,12 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         return 0;
     }
 
+    private void reapplyCurrentProxySettings() {
+        if (useProxySettings && SharedConfig.currentProxy != null) {
+            ConnectionsManager.setProxySettings(true, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret);
+        }
+    }
+
     private String[] getMtProxyTlsProfileOptionLabels() {
         return new String[] {
                 getString(R.string.MtProxyTlsProfileAuto),
@@ -639,6 +673,40 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 getString(R.string.MtProxyTlsProfileAndroidChrome),
                 getString(R.string.MtProxyTlsProfileAndroidOkHttp),
                 getString(R.string.MtProxyTlsProfileFirefox),
+        };
+    }
+
+    private int getMtProxyRecordSizingIndex() {
+        for (int i = 0; i < MT_PROXY_RECORD_SIZING_OPTIONS.length; i++) {
+            if (MT_PROXY_RECORD_SIZING_OPTIONS[i] == SharedConfig.mtProxyRecordSizingMode) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    private String[] getMtProxyRecordSizingLabels() {
+        return new String[] {
+                getString(R.string.MtProxyRecordSizingOff),
+                getString(R.string.MtProxyRecordSizingConservative),
+                getString(R.string.MtProxyRecordSizingVaried),
+        };
+    }
+
+    private int getMtProxyTimingIndex() {
+        for (int i = 0; i < MT_PROXY_TIMING_OPTIONS.length; i++) {
+            if (MT_PROXY_TIMING_OPTIONS[i] == SharedConfig.mtProxyTimingMode) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    private String[] getMtProxyTimingLabels() {
+        return new String[] {
+                getString(R.string.MtProxyTimingOff),
+                getString(R.string.MtProxyTimingGentle),
+                getString(R.string.MtProxyTimingBalanced),
         };
     }
 
@@ -664,13 +732,29 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
             tlsProfileInfoRow = rowCount++;
             clientHelloFragmentationRow = rowCount++;
             clientHelloFragmentationInfoRow = rowCount++;
+            mtProxySoftMuxRow = rowCount++;
+            mtProxySoftMuxInfoRow = rowCount++;
+            mtProxyHandshakeAdmissionRow = rowCount++;
+            mtProxyHandshakeAdmissionInfoRow = rowCount++;
+            mtProxyRecordSizingRow = rowCount++;
+            mtProxyRecordSizingInfoRow = rowCount++;
+            mtProxyTimingRow = rowCount++;
+            mtProxyTimingInfoRow = rowCount++;
         } else {
             tlsProfileRow = -1;
             tlsProfileInfoRow = -1;
             clientHelloFragmentationRow = -1;
             clientHelloFragmentationInfoRow = -1;
+            mtProxySoftMuxRow = -1;
+            mtProxySoftMuxInfoRow = -1;
+            mtProxyHandshakeAdmissionRow = -1;
+            mtProxyHandshakeAdmissionInfoRow = -1;
+            mtProxyRecordSizingRow = -1;
+            mtProxyRecordSizingInfoRow = -1;
+            mtProxyTimingRow = -1;
+            mtProxyTimingInfoRow = -1;
         }
-        if (rotationTimeoutInfoRow == -1 && tlsProfileInfoRow == -1 && clientHelloFragmentationInfoRow == -1) {
+        if (rotationTimeoutInfoRow == -1 && tlsProfileInfoRow == -1 && clientHelloFragmentationInfoRow == -1 && mtProxySoftMuxInfoRow == -1 && mtProxyHandshakeAdmissionInfoRow == -1 && mtProxyRecordSizingInfoRow == -1 && mtProxyTimingInfoRow == -1) {
             useProxyShadowRow = rowCount++;
         } else {
             useProxyShadowRow = -1;
@@ -943,6 +1027,10 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                         checkCell.setTextAndCheck(getString(R.string.UseProxyRotation), SharedConfig.proxyRotationEnabled, true);
                     } else if (position == clientHelloFragmentationRow) {
                         checkCell.setTextAndCheck(getString(R.string.MtProxyClientHelloFragmentation), SharedConfig.mtProxyClientHelloFragmentation, true);
+                    } else if (position == mtProxySoftMuxRow) {
+                        checkCell.setTextAndCheck(getString(R.string.MtProxySoftMux), SharedConfig.mtProxySoftMux, true);
+                    } else if (position == mtProxyHandshakeAdmissionRow) {
+                        checkCell.setTextAndCheck(getString(R.string.MtProxyHandshakeAdmission), SharedConfig.mtProxyHandshakeAdmission, true);
                     }
                     break;
                 }
@@ -956,6 +1044,14 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                         cell.setText(getString(R.string.MtProxyTlsProfile) + "\n" + getString(R.string.MtProxyTlsProfileInfo));
                     } else if (position == clientHelloFragmentationInfoRow) {
                         cell.setText(getString(R.string.MtProxyClientHelloFragmentationInfo));
+                    } else if (position == mtProxySoftMuxInfoRow) {
+                        cell.setText(getString(R.string.MtProxySoftMuxInfo));
+                    } else if (position == mtProxyHandshakeAdmissionInfoRow) {
+                        cell.setText(getString(R.string.MtProxyHandshakeAdmissionInfo));
+                    } else if (position == mtProxyRecordSizingInfoRow) {
+                        cell.setText(getString(R.string.MtProxyRecordSizingInfo));
+                    } else if (position == mtProxyTimingInfoRow) {
+                        cell.setText(getString(R.string.MtProxyTimingInfo));
                     }
                     break;
                 }
@@ -988,11 +1084,31 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                                 return;
                             }
                             ConnectionsManager.setMtProxyTlsProfileOverride(MT_PROXY_TLS_PROFILE_OPTIONS[i]);
-                            if (useProxySettings && SharedConfig.currentProxy != null) {
-                                ConnectionsManager.setProxySettings(true, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret);
-                            }
+                            reapplyCurrentProxySettings();
                         });
                         chooseView.setOptions(getMtProxyTlsProfileOptionIndex(), getMtProxyTlsProfileOptionLabels());
+                    } else if (position == mtProxyRecordSizingRow) {
+                        SlideChooseView chooseView = (SlideChooseView) holder.itemView;
+                        chooseView.setCallback(i -> {
+                            if (i < 0 || i >= MT_PROXY_RECORD_SIZING_OPTIONS.length) {
+                                return;
+                            }
+                            SharedConfig.mtProxyRecordSizingMode = MT_PROXY_RECORD_SIZING_OPTIONS[i];
+                            SharedConfig.saveConfig();
+                            reapplyCurrentProxySettings();
+                        });
+                        chooseView.setOptions(getMtProxyRecordSizingIndex(), getMtProxyRecordSizingLabels());
+                    } else if (position == mtProxyTimingRow) {
+                        SlideChooseView chooseView = (SlideChooseView) holder.itemView;
+                        chooseView.setCallback(i -> {
+                            if (i < 0 || i >= MT_PROXY_TIMING_OPTIONS.length) {
+                                return;
+                            }
+                            SharedConfig.mtProxyTimingMode = MT_PROXY_TIMING_OPTIONS[i];
+                            SharedConfig.saveConfig();
+                            reapplyCurrentProxySettings();
+                        });
+                        chooseView.setOptions(getMtProxyTimingIndex(), getMtProxyTimingLabels());
                     }
                     break;
                 }
@@ -1038,6 +1154,10 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     checkCell.setChecked(SharedConfig.proxyRotationEnabled);
                 } else if (position == clientHelloFragmentationRow) {
                     checkCell.setChecked(SharedConfig.mtProxyClientHelloFragmentation);
+                } else if (position == mtProxySoftMuxRow) {
+                    checkCell.setChecked(SharedConfig.mtProxySoftMux);
+                } else if (position == mtProxyHandshakeAdmissionRow) {
+                    checkCell.setChecked(SharedConfig.mtProxyHandshakeAdmission);
                 }
             }
         }
@@ -1045,7 +1165,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         @Override
         public boolean isEnabled(RecyclerView.ViewHolder holder) {
             int position = holder.getAdapterPosition();
-            return position == useProxyRow || position == rotationRow || position == tlsProfileRow || position == clientHelloFragmentationRow || position == callsRow || position == proxyAddRow || position == deleteAllRow || position >= proxyStartRow && position < proxyEndRow;
+            return position == useProxyRow || position == rotationRow || position == tlsProfileRow || position == clientHelloFragmentationRow || position == mtProxySoftMuxRow || position == mtProxyHandshakeAdmissionRow || position == callsRow || position == proxyAddRow || position == deleteAllRow || position >= proxyStartRow && position < proxyEndRow;
         }
 
         @Override
@@ -1120,7 +1240,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 return VIEW_TYPE_SHADOW;
             } else if (position == proxyAddRow || position == deleteAllRow) {
                 return VIEW_TYPE_TEXT_SETTING;
-            } else if (position == useProxyRow || position == rotationRow || position == clientHelloFragmentationRow || position == callsRow) {
+            } else if (position == useProxyRow || position == rotationRow || position == clientHelloFragmentationRow || position == mtProxySoftMuxRow || position == mtProxyHandshakeAdmissionRow || position == callsRow) {
                 return VIEW_TYPE_TEXT_CHECK;
             } else if (position == connectionsHeaderRow) {
                 return VIEW_TYPE_HEADER;

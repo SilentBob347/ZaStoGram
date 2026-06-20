@@ -63,7 +63,6 @@ static constexpr int32_t MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF = 0;
 static constexpr int32_t MT_PROXY_CLIENT_HELLO_FRAGMENTATION_SOFT = 1;
 static constexpr int64_t MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS = 4500;
 static constexpr int64_t MT_PROXY_SERVER_HELLO_HMAC_WAIT_MS = 900;
-static constexpr bool MT_PROXY_HANDSHAKE_ADMISSION_ENABLED = false;
 static constexpr bool MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED = false;
 static constexpr bool MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED = true;
 static constexpr size_t MT_PROXY_TLS_SERVER_RESPONSE_MAX_BYTES = 64 * 1024;
@@ -1193,7 +1192,7 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6) {
     if (proxyAuthState < 10 || socketFd < 0) {
         return false;
     }
-    if (!MT_PROXY_HANDSHAKE_ADMISSION_ENABLED) {
+    if (ConnectionsManager::getInstance(instanceNum).proxyHandshakeAdmission == 0) {
         if (proxyHandshakeAdmissionKey.empty()) {
             proxyHandshakeAdmissionKey = currentAddress + ":" + std::to_string((unsigned int) currentPort) + ":" + currentSecretDomain;
         }
@@ -1361,7 +1360,9 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
         state.recentSuccesses = 0;
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_observed reason=%s key=%s cooldown=disabled", this, reason, proxyHandshakeAdmissionKey.c_str());
     }
-    hasNextRequest = mtProxyTakeNextQueuedRequestLocked(proxyHandshakeAdmissionKey, state, now, nextRequest);
+    if (ConnectionsManager::getInstance(instanceNum).proxyHandshakeAdmission != 0) {
+        hasNextRequest = mtProxyTakeNextQueuedRequestLocked(proxyHandshakeAdmissionKey, state, now, nextRequest);
+    }
     pthread_mutex_unlock(&proxyHandshakeSchedulerMutex);
 
     proxyHandshakeAdmissionQueued = false;

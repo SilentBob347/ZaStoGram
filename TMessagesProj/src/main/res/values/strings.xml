@@ -10923,6 +10923,10 @@
     <string name="WearAuthEmojisLogIn">Log In</string>
     <string name="MtProxyClientHelloFragmentation">Soft ClientHello fragmentation</string>
     <string name="MtProxyClientHelloFragmentationInfo">Splits only the FakeTLS ClientHello into small TCP writes. MTProto traffic after connection is not changed.</string>
+    <string name="MtProxySoftMux">Reduce parallel MTProxy channels</string>
+    <string name="MtProxySoftMuxInfo">Uses fewer parallel download and upload connections while MTProxy is active. Direct connections keep the default behavior.</string>
+    <string name="MtProxyHandshakeAdmission">Gate FakeTLS handshakes</string>
+    <string name="MtProxyHandshakeAdmissionInfo">Starts FakeTLS handshakes to the same proxy endpoint through a small priority queue. Proxy checks bypass this gate.</string>
     <string name="MtProxyTlsProfile">JA4 / TLS profile</string>
     <string name="MtProxyTlsProfileInfo">Auto keeps one stable profile per proxy and secret. Auto rotate changes the profile only after suspicious FakeTLS failures. Manual mode forces one profile for all FakeTLS proxies.</string>
     <string name="MtProxyTlsProfileAuto">Auto</string>
