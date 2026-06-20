@@ -3493,8 +3493,11 @@ static int32_t normalizeMtProxyClientHelloFragmentation(int32_t mtProxyClientHel
     return mtProxyClientHelloFragmentation == 1 ? 1 : 0;
 }
 
-static int32_t normalizeMtProxyHandshakeAdmission(int32_t mtProxyHandshakeAdmission) {
-    return mtProxyHandshakeAdmission == 1 ? 1 : 0;
+static int32_t normalizeMtProxyConnectionPatternMode(int32_t mtProxyConnectionPatternMode) {
+    if (mtProxyConnectionPatternMode >= 0 && mtProxyConnectionPatternMode <= 3) {
+        return mtProxyConnectionPatternMode;
+    }
+    return 0;
 }
 
 static int32_t normalizeMtProxyRecordSizingMode(int32_t mtProxyRecordSizingMode) {
@@ -3895,21 +3898,21 @@ void ConnectionsManager::init(uint32_t version, int32_t layer, int32_t apiId, st
     }
 }
 
-void ConnectionsManager::setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyHandshakeAdmission, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode) {
-    scheduleTask([&, address, port, username, password, secret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyHandshakeAdmission, mtProxyRecordSizingMode, mtProxyTimingMode] {
+void ConnectionsManager::setProxySettings(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyConnectionPatternMode, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode) {
+    scheduleTask([&, address, port, username, password, secret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyConnectionPatternMode, mtProxyRecordSizingMode, mtProxyTimingMode] {
         std::string newSecret = decodeSecret(secret);
         int32_t newProxyTlsProfile = normalizeMtProxyTlsProfile(mtProxyTlsProfile);
         int32_t newClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(mtProxyClientHelloFragmentation);
-        int32_t newHandshakeAdmission = normalizeMtProxyHandshakeAdmission(mtProxyHandshakeAdmission);
+        int32_t newConnectionPatternMode = normalizeMtProxyConnectionPatternMode(mtProxyConnectionPatternMode);
         int32_t newRecordSizingMode = normalizeMtProxyRecordSizingMode(mtProxyRecordSizingMode);
         int32_t newTimingMode = normalizeMtProxyTimingMode(mtProxyTimingMode);
         bool secretChanged = proxySecret != newSecret;
         bool profileChanged = proxyTlsProfile != newProxyTlsProfile;
         bool clientHelloFragmentationChanged = proxyClientHelloFragmentation != newClientHelloFragmentation;
-        bool handshakeAdmissionChanged = proxyHandshakeAdmission != newHandshakeAdmission;
+        bool connectionPatternChanged = proxyConnectionPatternMode != newConnectionPatternMode;
         bool recordSizingChanged = proxyRecordSizingMode != newRecordSizingMode;
         bool timingModeChanged = proxyTimingMode != newTimingMode;
-        bool reconnect = proxyAddress != address || proxyPort != port || username != proxyUser || proxyPassword != password || secretChanged || profileChanged || clientHelloFragmentationChanged || handshakeAdmissionChanged || recordSizingChanged || timingModeChanged;
+        bool reconnect = proxyAddress != address || proxyPort != port || username != proxyUser || proxyPassword != password || secretChanged || profileChanged || clientHelloFragmentationChanged || connectionPatternChanged || recordSizingChanged || timingModeChanged;
         proxyAddress = address;
         proxyPort = port;
         proxyUser = username;
@@ -3917,7 +3920,7 @@ void ConnectionsManager::setProxySettings(std::string address, uint16_t port, st
         proxySecret = std::move(newSecret);
         proxyTlsProfile = normalizeMtProxyTlsProfile(mtProxyTlsProfile);
         proxyClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(mtProxyClientHelloFragmentation);
-        proxyHandshakeAdmission = normalizeMtProxyHandshakeAdmission(mtProxyHandshakeAdmission);
+        proxyConnectionPatternMode = normalizeMtProxyConnectionPatternMode(mtProxyConnectionPatternMode);
         proxyRecordSizingMode = normalizeMtProxyRecordSizingMode(mtProxyRecordSizingMode);
         proxyTimingMode = normalizeMtProxyTimingMode(mtProxyTimingMode);
         if (!proxyAddress.empty() && connectionState == ConnectionStateConnecting) {
@@ -4069,7 +4072,7 @@ void ConnectionsManager::setIpStrategy(uint8_t value) {
     });
 }
 
-int64_t ConnectionsManager::checkProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyHandshakeAdmission, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode, onRequestTimeFunc requestTimeFunc, jobject ptr1) {
+int64_t ConnectionsManager::checkProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyConnectionPatternMode, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode, onRequestTimeFunc requestTimeFunc, jobject ptr1) {
     auto proxyCheckInfo = new ProxyCheckInfo();
     proxyCheckInfo->address = address;
     proxyCheckInfo->port = port;
@@ -4078,7 +4081,7 @@ int64_t ConnectionsManager::checkProxy(std::string address, uint16_t port, std::
     proxyCheckInfo->secret = decodeSecret(secret);
     proxyCheckInfo->mtProxyTlsProfile = normalizeMtProxyTlsProfile(mtProxyTlsProfile);
     proxyCheckInfo->mtProxyClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(mtProxyClientHelloFragmentation);
-    proxyCheckInfo->mtProxyHandshakeAdmission = normalizeMtProxyHandshakeAdmission(mtProxyHandshakeAdmission);
+    proxyCheckInfo->mtProxyConnectionPatternMode = normalizeMtProxyConnectionPatternMode(mtProxyConnectionPatternMode);
     proxyCheckInfo->mtProxyRecordSizingMode = normalizeMtProxyRecordSizingMode(mtProxyRecordSizingMode);
     proxyCheckInfo->mtProxyTimingMode = normalizeMtProxyTimingMode(mtProxyTimingMode);
     proxyCheckInfo->onRequestTime = requestTimeFunc;
@@ -4170,7 +4173,7 @@ void ConnectionsManager::checkProxyInternal(ProxyCheckInfo *proxyCheckInfo) {
         if (connection != nullptr) {
             proxyCheckInfo->state = ProxyCheckState::Connecting;
             proxyCheckInfo->startedAtMillis = getCurrentTimeMonotonicMillis();
-            connection->setOverrideProxy(proxyCheckInfo->address, proxyCheckInfo->port, proxyCheckInfo->username, proxyCheckInfo->password, proxyCheckInfo->secret, proxyCheckInfo->mtProxyTlsProfile, proxyCheckInfo->mtProxyClientHelloFragmentation, proxyCheckInfo->mtProxyRecordSizingMode, proxyCheckInfo->mtProxyTimingMode);
+            connection->setOverrideProxy(proxyCheckInfo->address, proxyCheckInfo->port, proxyCheckInfo->username, proxyCheckInfo->password, proxyCheckInfo->secret, proxyCheckInfo->mtProxyTlsProfile, proxyCheckInfo->mtProxyClientHelloFragmentation, proxyCheckInfo->mtProxyConnectionPatternMode, proxyCheckInfo->mtProxyRecordSizingMode, proxyCheckInfo->mtProxyTimingMode);
             connection->suspendConnection();
             proxyCheckInfo->connectionNum = freeConnectionNum;
             auto request = new TL_ping();

@@ -27,6 +27,7 @@ PROXY_CONNECT_RE = re.compile(r"connecting via proxy ([^ ]+) secret\[([0-9]+)\] 
 PROFILE_RE = re.compile(r"profile selected=([a-z_]+)(?: id=([0-9]+))?(?: hello=([0-9]+))?")
 CONNECT_RE = re.compile(r"connect_start .*profile=([a-z_]+).*address=([^ ]+) port=([0-9]+)")
 ADMISSION_KEY_RE = re.compile(r"admission_[a-z_]+ .*key=([^ ]+)(?: priority=([-0-9]+))?")
+CONNECTION_PATTERN_RE = re.compile(r"connection_pattern=([^ ]+)")
 CLIENT_HELLO_SENT_RE = re.compile(r"client_hello_sent bytes=([0-9]+)")
 DISCONNECT_RE = re.compile(
     r"mtproxy_disconnect reason=([-0-9]+).*?error=([-0-9]+).*?"
@@ -85,6 +86,7 @@ class Attempt:
     connection_type: str = ""
     telegram_endpoint: str = ""
     priority: str = ""
+    connection_pattern: str = ""
     disconnect: str = ""
     disconnect_reason: str = ""
     disconnect_error: str = ""
@@ -173,6 +175,10 @@ class Attempt:
             if admission_key.group(2):
                 self.priority = admission_key.group(2)
 
+        connection_pattern = CONNECTION_PATTERN_RE.search(text)
+        if connection_pattern:
+            self.connection_pattern = connection_pattern.group(1)
+
         profile = PROFILE_RE.search(text)
         if profile:
             self.profile = profile.group(1)
@@ -259,6 +265,8 @@ class Attempt:
             parts.append(f"type={self.connection_type}")
         if self.priority:
             parts.append(f"priority={self.priority}")
+        if self.connection_pattern:
+            parts.append(f"pattern={self.connection_pattern}")
         if (hmac_ms := self.timing_ms("client_hello_sent", "server_hello_hmac_ok")):
             parts.append(f"hmac_ms={hmac_ms}")
         if self.disconnect_reason:
@@ -737,12 +745,14 @@ def print_faketls_reliability_summary(attempts: list[Attempt]) -> None:
     by_profile: defaultdict[str, list[Attempt]] = defaultdict(list)
     by_endpoint_profile: defaultdict[tuple[str, str], list[Attempt]] = defaultdict(list)
     by_endpoint: defaultdict[str, list[Attempt]] = defaultdict(list)
+    by_connection_pattern: defaultdict[str, list[Attempt]] = defaultdict(list)
     for attempt in attempts:
         profile = profile_text(attempt)
         endpoint = attempt.endpoint_text()
         by_profile[profile].append(attempt)
         by_endpoint_profile[(endpoint, profile)].append(attempt)
         by_endpoint[endpoint].append(attempt)
+        by_connection_pattern[attempt.connection_pattern or "unknown"].append(attempt)
 
     print()
     print("FakeTLS reliability:")
@@ -762,6 +772,19 @@ def print_faketls_reliability_summary(attempts: list[Attempt]) -> None:
             f"hmac_fail={verdicts['server_hello_hmac_mismatch']} "
             f"hmac_p50={percentile(hmac_values, 50) or '-'}ms"
         )
+
+    if by_connection_pattern:
+        print("  By connection pattern:")
+        for pattern, items in sorted(by_connection_pattern.items(), key=lambda item: (-len(item[1]), item[0])):
+            verdicts = Counter(item.verdict() for item in items)
+            print(
+                "    "
+                f"{pattern}: total={len(items)} ok={verdicts['ok']} "
+                f"ok_rate={ok_percent(verdicts['ok'], len(items))} "
+                f"max_1s={max_attempts_in_window(items, 1.0)} "
+                f"max_5s={max_attempts_in_window(items, 5.0)} "
+                f"{top_failures(verdicts)}"
+            )
 
     suspicious = []
     for (endpoint, profile), items in by_endpoint_profile.items():
@@ -788,16 +811,18 @@ def print_faketls_reliability_summary(attempts: list[Attempt]) -> None:
         if one_second >= 2 or five_seconds >= 3:
             verdicts = Counter(item.verdict() for item in items)
             profiles = Counter(profile_text(item) for item in items)
-            burst_rows.append((five_seconds, one_second, len(items), endpoint, verdicts, profiles))
+            patterns = Counter((item.connection_pattern or "unknown") for item in items)
+            burst_rows.append((five_seconds, one_second, len(items), endpoint, verdicts, profiles, patterns))
     burst_rows.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3]))
     if burst_rows:
         print("  Endpoint handshake bursts:")
-        for five_seconds, one_second, total, endpoint, verdicts, profiles in burst_rows[:20]:
+        for five_seconds, one_second, total, endpoint, verdicts, profiles, patterns in burst_rows[:20]:
             profile_mix = ", ".join(f"{profile}={count}" for profile, count in profiles.most_common(3))
+            pattern_mix = ", ".join(f"{pattern}={count}" for pattern, count in patterns.most_common(3))
             print(
                 "    "
                 f"{endpoint}: total={total} max_1s={one_second} max_5s={five_seconds} "
-                f"ok={verdicts['ok']} failures={total - verdicts['ok']} profiles={profile_mix}"
+                f"ok={verdicts['ok']} failures={total - verdicts['ok']} profiles={profile_mix} patterns={pattern_mix}"
             )
 
 
@@ -841,6 +866,7 @@ def write_csv_reports(attempts: list[Attempt], out_dir: Path) -> None:
                 "endpoint",
                 "profile",
                 "profile_id",
+                "connection_pattern",
                 "secret_kind",
                 "hello_bytes",
                 "client_hello_bytes",
@@ -866,6 +892,7 @@ def write_csv_reports(attempts: list[Attempt], out_dir: Path) -> None:
                     "endpoint": attempt.endpoint_text(),
                     "profile": profile_text(attempt),
                     "profile_id": attempt.profile_id,
+                    "connection_pattern": attempt.connection_pattern,
                     "secret_kind": attempt.secret_kind,
                     "hello_bytes": attempt.hello_bytes,
                     "client_hello_bytes": attempt.client_hello_bytes,

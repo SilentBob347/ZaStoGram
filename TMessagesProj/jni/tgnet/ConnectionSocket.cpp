@@ -68,6 +68,10 @@ static constexpr int32_t MT_PROXY_RECORD_SIZING_VARIED = 2;
 static constexpr int32_t MT_PROXY_TIMING_OFF = 0;
 static constexpr int32_t MT_PROXY_TIMING_GENTLE = 1;
 static constexpr int32_t MT_PROXY_TIMING_BALANCED = 2;
+static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_OFF = 0;
+static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_SOFT = 1;
+static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_QUIET = 2;
+static constexpr int32_t MT_PROXY_CONNECTION_PATTERN_STRICT = 3;
 static constexpr int64_t MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS = 4500;
 static constexpr int64_t MT_PROXY_SERVER_HELLO_HMAC_WAIT_MS = 900;
 static constexpr bool MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED = false;
@@ -142,6 +146,7 @@ struct MtProxyHandshakeEndpointState {
     int32_t activeHandshakes = 0;
     int32_t recentSuccesses = 0;
     int32_t freezePenalty = 0;
+    int64_t lastGrantTime = 0;
     int64_t lastSuccessTime = 0;
     int64_t cooldownUntil = 0;
     std::vector<MtProxyHandshakeQueuedRequest> queuedRequests;
@@ -192,17 +197,90 @@ static bool mtProxyVerifyServerHelloHmac(const std::string &secret, const uint8_
     return outLength == MT_PROXY_TLS_DIGEST_SIZE && memcmp(digest, responseBytes + 11, MT_PROXY_TLS_DIGEST_SIZE) == 0;
 }
 
-static uint32_t mtProxyHandshakeGrantDelay() {
+static int32_t normalizeMtProxyConnectionPatternMode(int32_t mode) {
+    if (mode >= MT_PROXY_CONNECTION_PATTERN_OFF && mode <= MT_PROXY_CONNECTION_PATTERN_STRICT) {
+        return mode;
+    }
+    return MT_PROXY_CONNECTION_PATTERN_OFF;
+}
+
+static const char *mtProxyConnectionPatternModeName(int32_t mode) {
+    switch (normalizeMtProxyConnectionPatternMode(mode)) {
+        case MT_PROXY_CONNECTION_PATTERN_SOFT:
+            return "soft";
+        case MT_PROXY_CONNECTION_PATTERN_QUIET:
+            return "quiet";
+        case MT_PROXY_CONNECTION_PATTERN_STRICT:
+            return "strict";
+        case MT_PROXY_CONNECTION_PATTERN_OFF:
+        default:
+            return "off";
+    }
+}
+
+static bool mtProxyConnectionPatternUsesAdmission(int32_t mode) {
+    return normalizeMtProxyConnectionPatternMode(mode) != MT_PROXY_CONNECTION_PATTERN_OFF;
+}
+
+static bool mtProxyConnectionPatternUsesCooldown(int32_t mode) {
+    mode = normalizeMtProxyConnectionPatternMode(mode);
+    return mode == MT_PROXY_CONNECTION_PATTERN_QUIET || mode == MT_PROXY_CONNECTION_PATTERN_STRICT;
+}
+
+static uint32_t mtProxyHandshakeGrantDelay(int32_t mode) {
+    mode = normalizeMtProxyConnectionPatternMode(mode);
+    if (mode == MT_PROXY_CONNECTION_PATTERN_STRICT) {
+        return 3000 + secureRandomBounded(3001);
+    }
+    if (mode == MT_PROXY_CONNECTION_PATTERN_QUIET) {
+        return 1200 + secureRandomBounded(1301);
+    }
     return 90 + secureRandomBounded(161);
 }
 
-static uint32_t mtProxyHandshakeRetryDelay(int64_t now, int64_t cooldownUntil, int32_t priority) {
-    uint32_t baseDelay = priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 180 : 420;
-    uint32_t delay = baseDelay + secureRandomBounded(priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 181 : 421);
-    if (MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED && cooldownUntil > now) {
+static uint32_t mtProxyHandshakeSpacingDelay(const MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode) {
+    mode = normalizeMtProxyConnectionPatternMode(mode);
+    if (mode != MT_PROXY_CONNECTION_PATTERN_QUIET && mode != MT_PROXY_CONNECTION_PATTERN_STRICT) {
+        return 0;
+    }
+    if (state.lastGrantTime <= 0) {
+        return 0;
+    }
+    uint32_t minGap = mode == MT_PROXY_CONNECTION_PATTERN_STRICT
+            ? 1000 + secureRandomBounded(751)
+            : 650 + secureRandomBounded(451);
+    int64_t elapsed = now - state.lastGrantTime;
+    if (elapsed >= (int64_t) minGap) {
+        return 0;
+    }
+    return (uint32_t) ((int64_t) minGap - elapsed);
+}
+
+static void mtProxyRecordHandshakeGrant(MtProxyHandshakeEndpointState &state, int64_t now, uint32_t delay) {
+    int64_t grantTime = now + delay;
+    if (state.lastGrantTime < grantTime) {
+        state.lastGrantTime = grantTime;
+    }
+}
+
+static uint32_t mtProxyHandshakeRetryDelay(int64_t now, int64_t cooldownUntil, int32_t priority, int32_t mode) {
+    mode = normalizeMtProxyConnectionPatternMode(mode);
+    uint32_t delay;
+    if (mode == MT_PROXY_CONNECTION_PATTERN_STRICT) {
+        uint32_t baseDelay = priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 1800 : 3500;
+        delay = baseDelay + secureRandomBounded(priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 2201 : 3001);
+    } else if (mode == MT_PROXY_CONNECTION_PATTERN_QUIET) {
+        uint32_t baseDelay = priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 800 : 1600;
+        delay = baseDelay + secureRandomBounded(priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 1001 : 1601);
+    } else {
+        uint32_t baseDelay = priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 180 : 420;
+        delay = baseDelay + secureRandomBounded(priority <= MT_PROXY_HANDSHAKE_PRIORITY_MEDIA ? 181 : 421);
+    }
+    if (mtProxyConnectionPatternUsesCooldown(mode) && cooldownUntil > now) {
         int64_t cooldownDelay = cooldownUntil - now;
-        if (cooldownDelay > 5000) {
-            cooldownDelay = 5000;
+        int64_t maxDelay = mode == MT_PROXY_CONNECTION_PATTERN_STRICT ? 12000 : 5000;
+        if (cooldownDelay > maxDelay) {
+            cooldownDelay = maxDelay;
         }
         if ((int64_t) delay > cooldownDelay) {
             delay = (uint32_t) cooldownDelay;
@@ -214,11 +292,12 @@ static uint32_t mtProxyHandshakeRetryDelay(int64_t now, int64_t cooldownUntil, i
     return delay;
 }
 
-static int32_t mtProxyHandshakeActiveLimit(const MtProxyHandshakeEndpointState &state, int64_t now) {
-    if (MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED && state.cooldownUntil > now) {
+static int32_t mtProxyHandshakeActiveLimit(const MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode) {
+    mode = normalizeMtProxyConnectionPatternMode(mode);
+    if (mtProxyConnectionPatternUsesCooldown(mode) && state.cooldownUntil > now) {
         return 1;
     }
-    if (state.recentSuccesses >= 2 && now - state.lastSuccessTime < 120000) {
+    if (mode == MT_PROXY_CONNECTION_PATTERN_SOFT && state.recentSuccesses >= 2 && now - state.lastSuccessTime < 120000) {
         return 2;
     }
     return 1;
@@ -242,8 +321,8 @@ static void mtProxyRemoveQueuedRequestLocked(ConnectionSocket *socket) {
     }
 }
 
-static bool mtProxyTakeNextQueuedRequestLocked(const std::string &key, MtProxyHandshakeEndpointState &state, int64_t now, MtProxyHandshakeQueuedRequest &request) {
-    int32_t limit = mtProxyHandshakeActiveLimit(state, now);
+static bool mtProxyTakeNextQueuedRequestLocked(const std::string &key, MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode, MtProxyHandshakeQueuedRequest &request) {
+    int32_t limit = mtProxyHandshakeActiveLimit(state, now, mode);
     if (state.activeHandshakes >= limit || state.queuedRequests.empty()) {
         return false;
     }
@@ -251,7 +330,7 @@ static bool mtProxyTakeNextQueuedRequestLocked(const std::string &key, MtProxyHa
     int bestIndex = -1;
     for (int i = 0; i < (int) state.queuedRequests.size(); i++) {
         const auto &candidate = state.queuedRequests[i];
-        if (MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED && state.cooldownUntil > now && candidate.priority > MT_PROXY_HANDSHAKE_PRIORITY_MEDIA) {
+        if (mtProxyConnectionPatternUsesCooldown(mode) && state.cooldownUntil > now && candidate.priority > MT_PROXY_HANDSHAKE_PRIORITY_MEDIA) {
             continue;
         }
         if (bestIndex < 0 || candidate.priority < state.queuedRequests[bestIndex].priority ||
@@ -266,7 +345,7 @@ static bool mtProxyTakeNextQueuedRequestLocked(const std::string &key, MtProxyHa
     request = state.queuedRequests[bestIndex];
     state.queuedRequests.erase(state.queuedRequests.begin() + bestIndex);
     state.activeHandshakes++;
-    if (LOGS_ENABLED) DEBUG_D("mtproxy_startup admission_dequeue key=%s active=%d queued=%d priority=%d", key.c_str(), state.activeHandshakes, (int) state.queuedRequests.size(), request.priority);
+    if (LOGS_ENABLED) DEBUG_D("mtproxy_startup admission_dequeue admission_mode=%s connection_pattern=%s key=%s active=%d queued=%d priority=%d", mtProxyConnectionPatternModeName(mode), mtProxyConnectionPatternModeName(mode), key.c_str(), state.activeHandshakes, (int) state.queuedRequests.size(), request.priority);
     return true;
 }
 
@@ -284,6 +363,20 @@ static void mtProxyApplyFreezeCooldown(MtProxyHandshakeEndpointState &state, int
         base = 180000;
     }
     state.cooldownUntil = now + base + secureRandomBounded(15001);
+}
+
+static void mtProxyApplyFailureCooldown(MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode) {
+    mode = normalizeMtProxyConnectionPatternMode(mode);
+    if (!mtProxyConnectionPatternUsesCooldown(mode)) {
+        return;
+    }
+    state.recentSuccesses = 0;
+    int64_t base = mode == MT_PROXY_CONNECTION_PATTERN_STRICT ? 8000 : 3000;
+    int64_t jitter = mode == MT_PROXY_CONNECTION_PATTERN_STRICT ? secureRandomBounded(12001) : secureRandomBounded(5001);
+    int64_t nextCooldown = now + base + jitter;
+    if (state.cooldownUntil < nextCooldown) {
+        state.cooldownUntil = nextCooldown;
+    }
 }
 
 static void mtProxyRecordHandshakeSuccess(MtProxyHandshakeEndpointState &state, int64_t now) {
@@ -1212,7 +1305,8 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6) {
     if (proxyAuthState < 10 || socketFd < 0) {
         return false;
     }
-    if (ConnectionsManager::getInstance(instanceNum).proxyHandshakeAdmission == 0) {
+    int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
+    if (!mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {
         if (proxyHandshakeAdmissionKey.empty()) {
             proxyHandshakeAdmissionKey = currentAddress + ":" + std::to_string((unsigned int) currentPort) + ":" + currentSecretDomain;
         }
@@ -1222,7 +1316,7 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6) {
         proxyHandshakeAdmissionIpv6 = ipv6;
         proxyHandshakeAdmissionStartTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
         proxyHandshakeClientHelloSentTime = 0;
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_disabled key=%s priority=%d", this, proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_disabled admission_mode=%s connection_pattern=%s key=%s priority=%d", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority);
         return false;
     }
     if (proxyHandshakeAdmissionPriority == MT_PROXY_HANDSHAKE_PRIORITY_BYPASS) {
@@ -1242,8 +1336,8 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6) {
     pthread_mutex_lock(&proxyHandshakeSchedulerMutex);
     mtProxyRemoveQueuedRequestLocked(this);
     MtProxyHandshakeEndpointState &state = proxyHandshakeEndpoints[proxyHandshakeAdmissionKey];
-    int32_t limit = mtProxyHandshakeActiveLimit(state, now);
-    bool cooldownBlocks = MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED && state.cooldownUntil > now && proxyHandshakeAdmissionPriority > MT_PROXY_HANDSHAKE_PRIORITY_MEDIA;
+    int32_t limit = mtProxyHandshakeActiveLimit(state, now, connectionPatternMode);
+    bool cooldownBlocks = mtProxyConnectionPatternUsesCooldown(connectionPatternMode) && state.cooldownUntil > now && proxyHandshakeAdmissionPriority > MT_PROXY_HANDSHAKE_PRIORITY_MEDIA;
     if (cooldownBlocks || state.activeHandshakes >= limit || mtProxyHandshakeHasHigherPriorityQueued(state, proxyHandshakeAdmissionPriority)) {
         MtProxyHandshakeQueuedRequest request;
         request.socket = this;
@@ -1253,18 +1347,20 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6) {
         request.ipv6 = ipv6;
         state.queuedRequests.push_back(request);
         shouldQueue = true;
-        delay = mtProxyHandshakeRetryDelay(now, state.cooldownUntil, proxyHandshakeAdmissionPriority);
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_queue key=%s priority=%d active=%d limit=%d queued=%d cooldown_ms=%ld retry=%u", this, proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority, state.activeHandshakes, limit, (int) state.queuedRequests.size(), (long) std::max<int64_t>(0, state.cooldownUntil - now), delay);
+        delay = mtProxyHandshakeRetryDelay(now, state.cooldownUntil, proxyHandshakeAdmissionPriority, connectionPatternMode);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_queue admission_mode=%s connection_pattern=%s key=%s priority=%d active=%d limit=%d queued=%d cooldown_ms=%ld retry=%u", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority, state.activeHandshakes, limit, (int) state.queuedRequests.size(), (long) std::max<int64_t>(0, state.cooldownUntil - now), delay);
     } else {
         state.activeHandshakes++;
         proxyHandshakeAdmissionActive = true;
         proxyHandshakeAdmissionQueued = false;
         proxyHandshakeAdmissionStartTime = now;
         proxyHandshakeClientHelloSentTime = 0;
+        delay = mtProxyHandshakeSpacingDelay(state, now, connectionPatternMode);
         if (state.activeHandshakes > 1) {
-            delay = mtProxyHandshakeGrantDelay();
+            delay = mtProxyHandshakeGrantDelay(connectionPatternMode);
         }
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_grant key=%s priority=%d active=%d limit=%d delay=%u successes=%d", this, proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority, state.activeHandshakes, limit, delay, state.recentSuccesses);
+        mtProxyRecordHandshakeGrant(state, now, delay);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_grant admission_mode=%s connection_pattern=%s key=%s priority=%d active=%d limit=%d delay=%u successes=%d", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority, state.activeHandshakes, limit, delay, state.recentSuccesses);
     }
     pthread_mutex_unlock(&proxyHandshakeSchedulerMutex);
 
@@ -1333,7 +1429,7 @@ void ConnectionSocket::grantProxyHandshakeAdmission(bool ipv6, uint32_t generati
     proxyHandshakeAdmissionReady = true;
     proxyHandshakeAdmissionStartTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     proxyHandshakeClientHelloSentTime = 0;
-    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_grant_queued reason=%s key=%s priority=%d delay=%u", this, reason, proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority, delay);
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_grant_queued admission_mode=%s connection_pattern=%s reason=%s key=%s priority=%d delay=%u", this, mtProxyConnectionPatternModeName(currentConnectionPatternMode), mtProxyConnectionPatternModeName(currentConnectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority, delay);
     scheduleProxyHandshakeAdmissionTimer(delay, MT_PROXY_HANDSHAKE_TIMER_ADMISSION, ipv6);
 }
 
@@ -1366,7 +1462,9 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
 
     MtProxyHandshakeQueuedRequest nextRequest;
     bool hasNextRequest = false;
+    uint32_t nextGrantDelay = 0;
     int64_t now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
+    int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
     pthread_mutex_lock(&proxyHandshakeSchedulerMutex);
     MtProxyHandshakeEndpointState &state = proxyHandshakeEndpoints[proxyHandshakeAdmissionKey];
     mtProxyRemoveQueuedRequestLocked(this);
@@ -1377,15 +1475,22 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
     bool shouldApplyFreezeCooldown = proxyHandshakeAdmissionActive && proxyHandshakeClientHelloSentTime > 0 && clientHelloElapsed >= MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS;
     if (succeeded) {
         mtProxyRecordHandshakeSuccess(state, now);
-    } else if (shouldApplyFreezeCooldown && MT_PROXY_HANDSHAKE_FREEZE_COOLDOWN_ENABLED) {
+    } else if (shouldApplyFreezeCooldown && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
         mtProxyApplyFreezeCooldown(state, now);
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_cooldown reason=%s key=%s penalty=%d cooldown_ms=%ld", this, reason, proxyHandshakeAdmissionKey.c_str(), state.freezePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str(), state.freezePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
+    } else if (!succeeded && proxyHandshakeAdmissionActive && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
+        mtProxyApplyFailureCooldown(state, now, connectionPatternMode);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_failure_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str(), (long) std::max<int64_t>(0, state.cooldownUntil - now));
     } else if (shouldApplyFreezeCooldown) {
         state.recentSuccesses = 0;
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_observed reason=%s key=%s cooldown=disabled", this, reason, proxyHandshakeAdmissionKey.c_str());
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_observed admission_mode=%s connection_pattern=%s reason=%s key=%s cooldown=disabled", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str());
     }
-    if (ConnectionsManager::getInstance(instanceNum).proxyHandshakeAdmission != 0) {
-        hasNextRequest = mtProxyTakeNextQueuedRequestLocked(proxyHandshakeAdmissionKey, state, now, nextRequest);
+    if (mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {
+        hasNextRequest = mtProxyTakeNextQueuedRequestLocked(proxyHandshakeAdmissionKey, state, now, connectionPatternMode, nextRequest);
+        if (hasNextRequest) {
+            nextGrantDelay = mtProxyHandshakeGrantDelay(connectionPatternMode);
+            mtProxyRecordHandshakeGrant(state, now, nextGrantDelay);
+        }
     }
     pthread_mutex_unlock(&proxyHandshakeSchedulerMutex);
 
@@ -1399,9 +1504,9 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
         proxyHandshakeAdmissionTimer->stop();
     }
 
-    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_release reason=%s success=%d key=%s next=%d", this, reason, succeeded ? 1 : 0, proxyHandshakeAdmissionKey.c_str(), hasNextRequest ? 1 : 0);
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_release admission_mode=%s connection_pattern=%s reason=%s success=%d key=%s next=%d", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, succeeded ? 1 : 0, proxyHandshakeAdmissionKey.c_str(), hasNextRequest ? 1 : 0);
     if (hasNextRequest && nextRequest.socket != nullptr) {
-        nextRequest.socket->grantProxyHandshakeAdmission(nextRequest.ipv6, nextRequest.generation, mtProxyHandshakeGrantDelay(), reason);
+        nextRequest.socket->grantProxyHandshakeAdmission(nextRequest.ipv6, nextRequest.generation, nextGrantDelay, reason);
     }
 }
 
@@ -1420,7 +1525,7 @@ void ConnectionSocket::markProxyHandshakeFreezeIfNeeded() {
     int64_t now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     int64_t elapsed = now - proxyHandshakeClientHelloSentTime;
     if (elapsed >= MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS) {
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_detected key=%s elapsed=%ld", this, proxyHandshakeAdmissionKey.c_str(), (long) elapsed);
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_detected admission_mode=%s connection_pattern=%s key=%s elapsed=%ld", this, mtProxyConnectionPatternModeName(currentConnectionPatternMode), mtProxyConnectionPatternModeName(currentConnectionPatternMode), proxyHandshakeAdmissionKey.c_str(), (long) elapsed);
         releaseProxyHandshakeAdmission(false, "freeze_timeout");
         if (MT_PROXY_HANDSHAKE_CLOSE_ON_FREEZE_ENABLED) {
             if (serverHelloHmacMismatchObserved) {
@@ -1698,6 +1803,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     currentProxyTlsProfile = normalizeMtProxyTlsProfile(MT_PROXY_TLS_PROFILE_ANDROID_CHROME);
     currentEffectiveProxyTlsProfile = currentProxyTlsProfile;
     currentClientHelloFragmentation = MT_PROXY_CLIENT_HELLO_FRAGMENTATION_OFF;
+    currentConnectionPatternMode = MT_PROXY_CONNECTION_PATTERN_OFF;
     currentRecordSizingMode = MT_PROXY_RECORD_SIZING_OFF;
     currentTimingMode = MT_PROXY_TIMING_OFF;
     nextTlsFrameWriteTime = 0;
@@ -1718,6 +1824,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     uint16_t proxyPort = overrideProxyPort;
     int32_t proxyTlsProfile = overrideProxyTlsProfile;
     int32_t proxyClientHelloFragmentation = overrideProxyClientHelloFragmentation;
+    int32_t proxyConnectionPatternMode = overrideProxyConnectionPatternMode;
     int32_t proxyRecordSizingMode = overrideProxyRecordSizingMode;
     int32_t proxyTimingMode = overrideProxyTimingMode;
     if (proxyAddress->empty()) {
@@ -1726,6 +1833,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         proxySecret = &ConnectionsManager::getInstance(instanceNum).proxySecret;
         proxyTlsProfile = ConnectionsManager::getInstance(instanceNum).proxyTlsProfile;
         proxyClientHelloFragmentation = ConnectionsManager::getInstance(instanceNum).proxyClientHelloFragmentation;
+        proxyConnectionPatternMode = ConnectionsManager::getInstance(instanceNum).proxyConnectionPatternMode;
         proxyRecordSizingMode = ConnectionsManager::getInstance(instanceNum).proxyRecordSizingMode;
         proxyTimingMode = ConnectionsManager::getInstance(instanceNum).proxyTimingMode;
     }
@@ -1751,6 +1859,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             currentProxyTlsProfileKey = *proxyAddress + ":" + std::to_string((unsigned int) proxyPort) + ":" + currentSecretDomain;
             currentEffectiveProxyTlsProfile = resolveMtProxyEffectiveTlsProfile(currentProxyTlsProfile, currentProxyTlsProfileKey);
             currentClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(proxyClientHelloFragmentation);
+            currentConnectionPatternMode = normalizeMtProxyConnectionPatternMode(proxyConnectionPatternMode);
             currentRecordSizingMode = normalizeMtProxyRecordSizingMode(proxyRecordSizingMode);
             currentTimingMode = normalizeMtProxyTimingMode(proxyTimingMode);
             proxyHandshakeAdmissionKey = *proxyAddress + ":" + std::to_string((unsigned int) proxyPort) + ":" + currentSecretDomain;
@@ -1853,6 +1962,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             currentProxyTlsProfileKey = address + ":" + std::to_string((unsigned int) port) + ":" + currentSecretDomain;
             currentEffectiveProxyTlsProfile = resolveMtProxyEffectiveTlsProfile(currentProxyTlsProfile, currentProxyTlsProfileKey);
             currentClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(ConnectionsManager::getInstance(instanceNum).proxyClientHelloFragmentation);
+            currentConnectionPatternMode = normalizeMtProxyConnectionPatternMode(ConnectionsManager::getInstance(instanceNum).proxyConnectionPatternMode);
             currentRecordSizingMode = normalizeMtProxyRecordSizingMode(ConnectionsManager::getInstance(instanceNum).proxyRecordSizingMode);
             currentTimingMode = normalizeMtProxyTimingMode(ConnectionsManager::getInstance(instanceNum).proxyTimingMode);
             proxyHandshakeAdmissionKey = address + ":" + std::to_string((unsigned int) port) + ":" + currentSecretDomain;
@@ -1871,7 +1981,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         }
     }
 
-    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup connect_start proxy_state=%d secret_kind=%s is_faketls=%d domain_len=%d profile=%s effective_profile=%s clienthello_fragment=%d record_sizing=%d timing=%d address=%s port=%u", this, (int) proxyAuthState, currentSecretKind, currentSecretIsFakeTls ? 1 : 0, (int) currentSecretDomain.size(), mtProxyTlsProfileName(currentProxyTlsProfile), mtProxyTlsProfileName(currentEffectiveProxyTlsProfile), currentClientHelloFragmentation, currentRecordSizingMode, currentTimingMode, currentAddress.c_str(), (unsigned int) currentPort);
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup connect_start proxy_state=%d secret_kind=%s is_faketls=%d domain_len=%d profile=%s effective_profile=%s clienthello_fragment=%d connection_pattern=%s record_sizing=%d timing=%d address=%s port=%u", this, (int) proxyAuthState, currentSecretKind, currentSecretIsFakeTls ? 1 : 0, (int) currentSecretDomain.size(), mtProxyTlsProfileName(currentProxyTlsProfile), mtProxyTlsProfileName(currentEffectiveProxyTlsProfile), currentClientHelloFragmentation, mtProxyConnectionPatternModeName(currentConnectionPatternMode), currentRecordSizingMode, currentTimingMode, currentAddress.c_str(), (unsigned int) currentPort);
     openConnectionInternal(ipv6);
 }
 
@@ -2539,7 +2649,7 @@ void ConnectionSocket::setMtProxyHandshakePriority(int32_t priority) {
     proxyHandshakeAdmissionPriority = priority;
 }
 
-void ConnectionSocket::setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode) {
+void ConnectionSocket::setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyConnectionPatternMode, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode) {
     overrideProxyAddress = address;
     overrideProxyPort = port;
     overrideProxyUser = username;
@@ -2547,6 +2657,7 @@ void ConnectionSocket::setOverrideProxy(std::string address, uint16_t port, std:
     overrideProxySecret = secret;
     overrideProxyTlsProfile = normalizeMtProxyTlsProfile(mtProxyTlsProfile);
     overrideProxyClientHelloFragmentation = normalizeMtProxyClientHelloFragmentation(mtProxyClientHelloFragmentation);
+    overrideProxyConnectionPatternMode = normalizeMtProxyConnectionPatternMode(mtProxyConnectionPatternMode);
     overrideProxyRecordSizingMode = normalizeMtProxyRecordSizingMode(mtProxyRecordSizingMode);
     overrideProxyTimingMode = normalizeMtProxyTimingMode(mtProxyTimingMode);
 }

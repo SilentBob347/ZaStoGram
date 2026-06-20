@@ -32,7 +32,7 @@ def main():
         handle.write("logcat.txt:2: connection(0x1) mtproxy_startup on_connected tls=0\n")
         handle.write(
             "logcat.txt:3: 06-20 15:00:00.000 connection(0x2) mtproxy_startup connect_start proxy_state=10 secret_kind=ee "
-            "is_faketls=1 domain_len=17 profile=android_chrome address=203.0.113.10 port=443\n"
+            "is_faketls=1 domain_len=17 profile=android_chrome connection_pattern=strict address=203.0.113.10 port=443\n"
         )
         handle.write("logcat.txt:4: connection(0x2) mtproxy_startup socket_connect_start ipv6=0 state=10\n")
         handle.write("logcat.txt:5: connection(0x2) mtproxy_startup socket_connected elapsed=90\n")
@@ -44,11 +44,11 @@ def main():
         handle.write("logcat.txt:8: connection(0x2) mtproxy_startup server_hello_timeout_close elapsed=4500\n")
         handle.write(
             "logcat.txt:9: 06-20 15:00:00.200 connection(0x2) mtproxy_startup connect_start proxy_state=10 secret_kind=ee "
-            "is_faketls=1 domain_len=17 profile=android_chrome address=203.0.113.10 port=443\n"
+            "is_faketls=1 domain_len=17 profile=android_chrome connection_pattern=strict address=203.0.113.10 port=443\n"
         )
         handle.write(
             "logcat.txt:9: 06-20 15:00:00.200 connection(0x2) mtproxy_startup admission_grant "
-            "key=blocked.example:443:cdn.example priority=20 active=1 max=1\n"
+            "admission_mode=strict connection_pattern=strict key=blocked.example:443:cdn.example priority=20 active=1 max=1\n"
         )
         handle.write("logcat.txt:10: connection(0x2) mtproxy_startup socket_connect_start ipv6=0 state=10\n")
         handle.write("logcat.txt:11: connection(0x2) mtproxy_startup socket_connected elapsed=80\n")
@@ -158,6 +158,14 @@ def main():
     require(
         "Endpoint handshake bursts:" in result.stdout,
         "analyzer must expose per-endpoint handshake bursts",
+    )
+    require(
+        "By connection pattern:" in result.stdout and "strict:" in result.stdout,
+        "analyzer must summarize FakeTLS attempts by connection-pattern mode",
+    )
+    require(
+        "patterns=strict=" in result.stdout,
+        "analyzer burst summary must include connection-pattern mix",
     )
     require(
         "blocked.example:443 client_hello_sent_no_server_hello: 1" in result.stdout,

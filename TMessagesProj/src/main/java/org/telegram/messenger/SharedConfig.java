@@ -319,7 +319,7 @@ public class SharedConfig {
     public static int proxyRotationTimeout;
     public static boolean mtProxyClientHelloFragmentation;
     public static boolean mtProxySoftMux = true;
-    public static boolean mtProxyHandshakeAdmission;
+    public static int mtProxyConnectionPatternMode;
     public static int mtProxyRecordSizingMode;
     public static int mtProxyTimingMode;
     public static int messageSeenHintCount;
@@ -473,7 +473,8 @@ public class SharedConfig {
                 editor.putInt("proxyRotationTimeout", proxyRotationTimeout);
                 editor.putBoolean("mtProxyClientHelloFragmentation", mtProxyClientHelloFragmentation);
                 editor.putBoolean("mtProxySoftMux", mtProxySoftMux);
-                editor.putBoolean("mtProxyHandshakeAdmission", mtProxyHandshakeAdmission);
+                editor.putInt("mtProxyConnectionPatternMode", mtProxyConnectionPatternMode);
+                editor.putBoolean("mtProxyHandshakeAdmission", mtProxyConnectionPatternMode != 0);
                 editor.putInt("mtProxyRecordSizingMode", mtProxyRecordSizingMode);
                 editor.putInt("mtProxyTimingMode", mtProxyTimingMode);
 
@@ -545,7 +546,14 @@ public class SharedConfig {
             proxyRotationTimeout = preferences.getInt("proxyRotationTimeout", ProxyRotationController.DEFAULT_TIMEOUT_INDEX);
             mtProxyClientHelloFragmentation = preferences.getBoolean("mtProxyClientHelloFragmentation", false);
             mtProxySoftMux = preferences.getBoolean("mtProxySoftMux", true);
-            mtProxyHandshakeAdmission = preferences.getBoolean("mtProxyHandshakeAdmission", false);
+            if (preferences.contains("mtProxyConnectionPatternMode")) {
+                mtProxyConnectionPatternMode = preferences.getInt("mtProxyConnectionPatternMode", 0);
+            } else {
+                mtProxyConnectionPatternMode = preferences.getBoolean("mtProxyHandshakeAdmission", false) ? 1 : 0;
+            }
+            if (mtProxyConnectionPatternMode < 0 || mtProxyConnectionPatternMode > 3) {
+                mtProxyConnectionPatternMode = 0;
+            }
             mtProxyRecordSizingMode = preferences.getInt("mtProxyRecordSizingMode", 0);
             mtProxyTimingMode = preferences.getInt("mtProxyTimingMode", 0);
             String authKeyString = preferences.getString("pushAuthKey", null);

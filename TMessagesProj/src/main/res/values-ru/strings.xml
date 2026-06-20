@@ -280,8 +280,12 @@
     <string name="MtProxyClientHelloFragmentationInfo">Делит только FakeTLS ClientHello на небольшие TCP-отправки. MTProto-трафик после подключения не меняется.</string>
     <string name="MtProxySoftMux">Меньше параллельных каналов MTProxy</string>
     <string name="MtProxySoftMuxInfo">Использует меньше параллельных download/upload-соединений, пока включён MTProxy. Прямые соединения работают как раньше.</string>
-    <string name="MtProxyHandshakeAdmission">Ограничивать старт FakeTLS</string>
-    <string name="MtProxyHandshakeAdmissionInfo">Запускает FakeTLS-рукопожатия к одному прокси через небольшую очередь по приоритетам. Проверка прокси эту очередь обходит.</string>
+    <string name="MtProxyConnectionPattern">Паттерн подключений MTProxy</string>
+    <string name="MtProxyConnectionPatternInfo">Меняет темп открытия FakeTLS-соединений к одному прокси. Тихий и строгий режимы уменьшают быстрые повторные попытки после timeout/freeze.</string>
+    <string name="MtProxyConnectionPatternOff">Обычный</string>
+    <string name="MtProxyConnectionPatternSoft">Мягкий</string>
+    <string name="MtProxyConnectionPatternQuiet">Тихий</string>
+    <string name="MtProxyConnectionPatternStrict">Строгий</string>
     <string name="MtProxyRecordSizing">Размер TLS-записей</string>
     <string name="MtProxyRecordSizingInfo">Меняет только размер FakeTLS ApplicationData-записей после подключения. Для диагностики стабильности лучше оставлять выключенным.</string>
     <string name="MtProxyRecordSizingOff">Выкл</string>

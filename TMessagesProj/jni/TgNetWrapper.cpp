@@ -223,13 +223,13 @@ void applyDatacenterAddress(JNIEnv *env, jclass c, jint instanceNum, jint datace
     }
 }
 
-void setProxySettings(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret, jint mtProxyTlsProfile, jint mtProxyClientHelloFragmentation, jint mtProxyHandshakeAdmission, jint mtProxyRecordSizingMode, jint mtProxyTimingMode) {
+void setProxySettings(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret, jint mtProxyTlsProfile, jint mtProxyClientHelloFragmentation, jint mtProxyConnectionPatternMode, jint mtProxyRecordSizingMode, jint mtProxyTimingMode) {
     const char *addressStr = env->GetStringUTFChars(address, 0);
     const char *usernameStr = env->GetStringUTFChars(username, 0);
     const char *passwordStr = env->GetStringUTFChars(password, 0);
     const char *secretStr = env->GetStringUTFChars(secret, 0);
 
-    ConnectionsManager::getInstance(instanceNum).setProxySettings(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr, (int32_t) mtProxyTlsProfile, (int32_t) mtProxyClientHelloFragmentation, (int32_t) mtProxyHandshakeAdmission, (int32_t) mtProxyRecordSizingMode, (int32_t) mtProxyTimingMode);
+    ConnectionsManager::getInstance(instanceNum).setProxySettings(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr, (int32_t) mtProxyTlsProfile, (int32_t) mtProxyClientHelloFragmentation, (int32_t) mtProxyConnectionPatternMode, (int32_t) mtProxyRecordSizingMode, (int32_t) mtProxyTimingMode);
 
     if (addressStr != 0) {
         env->ReleaseStringUTFChars(address, addressStr);
@@ -298,7 +298,7 @@ void applyDnsConfig(JNIEnv *env, jclass c, jint instanceNum, jlong address, jstr
     }
 }
 
-jlong checkProxy(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret, jint mtProxyTlsProfile, jint mtProxyClientHelloFragmentation, jint mtProxyHandshakeAdmission, jint mtProxyRecordSizingMode, jint mtProxyTimingMode, jobject requestTimeFunc) {
+jlong checkProxy(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint port, jstring username, jstring password, jstring secret, jint mtProxyTlsProfile, jint mtProxyClientHelloFragmentation, jint mtProxyConnectionPatternMode, jint mtProxyRecordSizingMode, jint mtProxyTimingMode, jobject requestTimeFunc) {
     const char *addressStr = env->GetStringUTFChars(address, 0);
     const char *usernameStr = env->GetStringUTFChars(username, 0);
     const char *passwordStr = env->GetStringUTFChars(password, 0);
@@ -309,7 +309,7 @@ jlong checkProxy(JNIEnv *env, jclass c, jint instanceNum, jstring address, jint 
         requestTimeFunc = env->NewGlobalRef(requestTimeFunc);
     }
 
-    jlong result = ConnectionsManager::getInstance(instanceNum).checkProxy(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr, (int32_t) mtProxyTlsProfile, (int32_t) mtProxyClientHelloFragmentation, (int32_t) mtProxyHandshakeAdmission, (int32_t) mtProxyRecordSizingMode, (int32_t) mtProxyTimingMode, [instanceNum, requestTimeFunc](int64_t time, const std::string &diagnostic) {
+    jlong result = ConnectionsManager::getInstance(instanceNum).checkProxy(addressStr, (uint16_t) port, usernameStr, passwordStr, secretStr, (int32_t) mtProxyTlsProfile, (int32_t) mtProxyClientHelloFragmentation, (int32_t) mtProxyConnectionPatternMode, (int32_t) mtProxyRecordSizingMode, (int32_t) mtProxyTimingMode, [instanceNum, requestTimeFunc](int64_t time, const std::string &diagnostic) {
         if (requestTimeFunc != nullptr) {
             jstring diagnosticString = jniEnv[instanceNum]->NewStringUTF(diagnostic.c_str());
             jniEnv[instanceNum]->CallVoidMethod(requestTimeFunc, jclass_RequestTimeDelegate_run, time, diagnosticString);

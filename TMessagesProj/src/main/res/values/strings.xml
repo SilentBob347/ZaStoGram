@@ -10925,8 +10925,12 @@
     <string name="MtProxyClientHelloFragmentationInfo">Splits only the FakeTLS ClientHello into small TCP writes. MTProto traffic after connection is not changed.</string>
     <string name="MtProxySoftMux">Reduce parallel MTProxy channels</string>
     <string name="MtProxySoftMuxInfo">Uses fewer parallel download and upload connections while MTProxy is active. Direct connections keep the default behavior.</string>
-    <string name="MtProxyHandshakeAdmission">Gate FakeTLS handshakes</string>
-    <string name="MtProxyHandshakeAdmissionInfo">Starts FakeTLS handshakes to the same proxy endpoint through a small priority queue. Proxy checks bypass this gate.</string>
+    <string name="MtProxyConnectionPattern">MTProxy connection pattern</string>
+    <string name="MtProxyConnectionPatternInfo">Changes how quickly FakeTLS connections are opened to one proxy. Quiet and Strict reduce fast repeated attempts after timeouts and freezes.</string>
+    <string name="MtProxyConnectionPatternOff">Default</string>
+    <string name="MtProxyConnectionPatternSoft">Soft</string>
+    <string name="MtProxyConnectionPatternQuiet">Quiet</string>
+    <string name="MtProxyConnectionPatternStrict">Strict</string>
     <string name="MtProxyRecordSizing">TLS record size</string>
     <string name="MtProxyRecordSizingInfo">Changes only FakeTLS ApplicationData record sizes after connection. Leave off when diagnosing transport stability.</string>
     <string name="MtProxyRecordSizingOff">Off</string>

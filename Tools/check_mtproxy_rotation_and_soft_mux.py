@@ -109,22 +109,24 @@ def main() -> None:
         "FileUploadOperation must use the MTProxy soft mux policy for upload slots",
     )
     require(
-        "mtProxyHandshakeAdmission" in shared_config
+        "mtProxyConnectionPatternMode" in shared_config
+        and 'getInt("mtProxyConnectionPatternMode"' in shared_config
         and 'getBoolean("mtProxyHandshakeAdmission", false)' in shared_config
-        and 'putBoolean("mtProxyHandshakeAdmission", mtProxyHandshakeAdmission)' in shared_config,
-        "SharedConfig must persist admission-controller as a disabled-by-default runtime setting",
+        and 'putInt("mtProxyConnectionPatternMode", mtProxyConnectionPatternMode)' in shared_config,
+        "SharedConfig must persist connection-pattern modes and migrate the old admission-controller boolean",
     )
     require(
-        "mtProxyHandshakeAdmissionRow" in proxy_list
-        and "MtProxyHandshakeAdmission" in proxy_list
-        and "SharedConfig.mtProxyHandshakeAdmission" in proxy_list,
-        "proxy settings UI must expose an admission-controller toggle",
+        "mtProxyConnectionPatternRow" in proxy_list
+        and "MtProxyConnectionPattern" in proxy_list
+        and "SharedConfig.mtProxyConnectionPatternMode" in proxy_list
+        and "MT_PROXY_CONNECTION_PATTERN_OPTIONS" in proxy_list,
+        "proxy settings UI must expose connection-pattern modes",
     )
     require(
-        "resolveMtProxyHandshakeAdmissionMode()" in connections
-        and "mtProxyHandshakeAdmission" in connections
-        and "native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyHandshakeAdmission, mtProxyRecordSizingMode, mtProxyTimingMode)" in connections,
-        "Java must pass the runtime admission-controller setting into native proxy settings",
+        "resolveMtProxyConnectionPatternMode()" in connections
+        and "mtProxyConnectionPatternMode" in connections
+        and "native_setProxySettings(currentAccount, proxyAddress, proxyPort, proxyUsername, proxyPassword, proxySecret, mtProxyTlsProfile, mtProxyClientHelloFragmentation, mtProxyConnectionPatternMode, mtProxyRecordSizingMode, mtProxyTimingMode)" in connections,
+        "Java must pass the runtime connection-pattern mode into native proxy settings",
     )
     require(
         'native_setProxySettings", "(ILjava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIII)V"' in wrapper_cpp
@@ -132,19 +134,19 @@ def main() -> None:
         "JNI signatures must carry the admission-controller integer",
     )
     require(
-        "int32_t proxyHandshakeAdmission = 0" in manager_h
-        and "handshakeAdmissionChanged" in manager_cpp
-        and "proxyHandshakeAdmission = normalizeMtProxyHandshakeAdmission" in manager_cpp,
-        "native ConnectionsManager must store admission-controller runtime state and reconnect when it changes",
+        "int32_t proxyConnectionPatternMode = 0" in manager_h
+        and "connectionPatternChanged" in manager_cpp
+        and "proxyConnectionPatternMode = normalizeMtProxyConnectionPatternMode" in manager_cpp,
+        "native ConnectionsManager must store connection-pattern runtime state and reconnect when it changes",
     )
     require(
         "MT_PROXY_HANDSHAKE_ADMISSION_ENABLED" not in socket_cpp
-        and "proxyHandshakeAdmission == 0" in socket_cpp
+        and "mtProxyConnectionPatternUsesAdmission" in socket_cpp
         and "admission_disabled" in socket_cpp,
-        "ConnectionSocket must use runtime admission state instead of a compile-time disabled flag",
+        "ConnectionSocket must use runtime connection-pattern state instead of a compile-time disabled flag",
     )
     require(
-        "if (ConnectionsManager::getInstance(instanceNum).proxyHandshakeAdmission != 0) {\n        hasNextRequest = mtProxyTakeNextQueuedRequestLocked" in socket_cpp,
+        "if (mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {\n        hasNextRequest = mtProxyTakeNextQueuedRequestLocked" in socket_cpp,
         "ConnectionSocket must not grant queued admission requests after the runtime gate is disabled",
     )
     for path in (STRINGS, STRINGS_RU):
@@ -156,9 +158,9 @@ def main() -> None:
         require(
             'name="MtProxySoftMux"' in source
             and 'name="MtProxySoftMuxInfo"' in source
-            and 'name="MtProxyHandshakeAdmission"' in source
-            and 'name="MtProxyHandshakeAdmissionInfo"' in source,
-            f"{path.name} must define soft mux and admission-controller strings",
+            and 'name="MtProxyConnectionPattern"' in source
+            and 'name="MtProxyConnectionPatternInfo"' in source,
+            f"{path.name} must define soft mux and connection-pattern strings",
         )
 
     print("MTProxy rotation and soft mux guard passed.")

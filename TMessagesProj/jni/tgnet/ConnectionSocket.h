@@ -33,7 +33,7 @@ public:
     time_t getTimeout();
     bool isDisconnected();
     void dropConnection();
-    void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode);
+    void setOverrideProxy(std::string address, uint16_t port, std::string username, std::string password, std::string secret, int32_t mtProxyTlsProfile, int32_t mtProxyClientHelloFragmentation, int32_t mtProxyConnectionPatternMode, int32_t mtProxyRecordSizingMode, int32_t mtProxyTimingMode);
     void onHostNameResolved(std::string host, std::string ip, bool ipv6);
     void setMtProxyHandshakePriority(int32_t priority);
     const char *getProxyCheckDiagnostic();
@@ -56,6 +56,7 @@ protected:
     uint16_t overrideProxyPort = 1080;
     int32_t overrideProxyTlsProfile = 0;
     int32_t overrideProxyClientHelloFragmentation = 0;
+    int32_t overrideProxyConnectionPatternMode = 0;
     int32_t overrideProxyRecordSizingMode = 0;
     int32_t overrideProxyTimingMode = 0;
 
@@ -84,6 +85,7 @@ private:
     int32_t currentProxyTlsProfile = 0;
     int32_t currentEffectiveProxyTlsProfile = 0;
     int32_t currentClientHelloFragmentation = 0;
+    int32_t currentConnectionPatternMode = 0;
     int32_t currentRecordSizingMode = 0;
     int32_t currentTimingMode = 0;
     std::string currentProxyTlsProfileKey;
