@@ -288,6 +288,7 @@
     <string name="ProxyStatusNetworkBlockSuspected">Похоже на сетевую блокировку до ответа MTProxy</string>
     <string name="ProxyStatusClientHelloNoServerHello">ClientHello отправлен, ServerHello не пришёл</string>
     <string name="ProxyStatusServerHelloHmacMismatch">ServerHello не прошёл HMAC-проверку MTProxy</string>
+    <string name="ProxyStatusMtproxyPacketSentNoResponse">MTProxy-пакет отправлен, ответа сервера нет</string>
     <string name="ProxyStatusPostHandshakeNoAppData">Рукопожатие прошло, MTProto-данные не пришли</string>
     <string name="ProxyStatusDroppedAfterAppData">Подключился и отвалился после первых данных</string>
     <string name="ProxyStatusCancelled">Проверка отменена</string>

@@ -34,6 +34,7 @@ public class ProxyCheckDiagnostics {
     public static final String NETWORK_BLOCK_SUSPECTED = "network_block_suspected";
     public static final String CLIENT_HELLO_SENT_NO_SERVER_HELLO = "client_hello_sent_no_server_hello";
     public static final String SERVER_HELLO_HMAC_MISMATCH = "server_hello_hmac_mismatch";
+    public static final String MTPROXY_PACKET_SENT_NO_RESPONSE = "mtproxy_packet_sent_no_response";
     public static final String POST_HANDSHAKE_NO_APPDATA = "post_handshake_no_appdata";
     public static final String DROPPED_AFTER_APPDATA = "dropped_after_appdata";
     public static final String CANCELLED = "cancelled";
@@ -67,6 +68,7 @@ public class ProxyCheckDiagnostics {
             case NETWORK_BLOCK_SUSPECTED:
             case CLIENT_HELLO_SENT_NO_SERVER_HELLO:
             case SERVER_HELLO_HMAC_MISMATCH:
+            case MTPROXY_PACKET_SENT_NO_RESPONSE:
             case POST_HANDSHAKE_NO_APPDATA:
             case DROPPED_AFTER_APPDATA:
             case CANCELLED:
@@ -151,11 +153,11 @@ public class ProxyCheckDiagnostics {
             if (hasFreshLivePhase(proxyInfo)) {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
             }
-            if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
-                return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
-            }
             if (hasFreshFailure(proxyInfo)) {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+            }
+            if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
+                return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
             }
             if (proxyInfo.checking) {
                 return LocaleController.getString(R.string.ProxyStatusCheckingConnection);
@@ -193,11 +195,11 @@ public class ProxyCheckDiagnostics {
         if (hasFreshLivePhase(proxyInfo)) {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
-        if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
-            return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
-        }
         if (hasFreshFailure(proxyInfo)) {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
+        }
+        if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
+            return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
         }
         if (proxyInfo.checking) {
             return LocaleController.getString(R.string.ProxyWindowStatusChecking);
@@ -276,6 +278,8 @@ public class ProxyCheckDiagnostics {
                 return LocaleController.getString(R.string.ProxyStatusClientHelloNoServerHello);
             case SERVER_HELLO_HMAC_MISMATCH:
                 return LocaleController.getString(R.string.ProxyStatusServerHelloHmacMismatch);
+            case MTPROXY_PACKET_SENT_NO_RESPONSE:
+                return LocaleController.getString(R.string.ProxyStatusMtproxyPacketSentNoResponse);
             case POST_HANDSHAKE_NO_APPDATA:
                 return LocaleController.getString(R.string.ProxyStatusPostHandshakeNoAppData);
             case DROPPED_AFTER_APPDATA:

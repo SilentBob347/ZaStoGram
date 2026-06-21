@@ -209,6 +209,7 @@
     <string name="ProxyStatusNetworkBlockSuspected">Looks like network filtering before MTProxy reply</string>
     <string name="ProxyStatusClientHelloNoServerHello">ClientHello sent, ServerHello did not arrive</string>
     <string name="ProxyStatusServerHelloHmacMismatch">ServerHello failed MTProxy HMAC check</string>
+    <string name="ProxyStatusMtproxyPacketSentNoResponse">MTProxy packet sent, no server response</string>
     <string name="ProxyStatusPostHandshakeNoAppData">Handshake passed, no MTProto data arrived</string>
     <string name="ProxyStatusDroppedAfterAppData">Connected, then dropped after first data</string>
     <string name="ProxyStatusCancelled">Check cancelled</string>

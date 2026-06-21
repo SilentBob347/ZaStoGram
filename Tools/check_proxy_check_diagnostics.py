@@ -31,6 +31,7 @@ REQUIRED_PHASES = [
     "tcp_connected_no_pong",
     "client_hello_sent_no_server_hello",
     "server_hello_hmac_mismatch",
+    "mtproxy_packet_sent_no_response",
     "post_handshake_no_appdata",
     "dropped_after_appdata",
     "cancelled",

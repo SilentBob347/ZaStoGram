@@ -78,7 +78,9 @@ def main() -> None:
     status_idx = diagnostics.find("public static String statusText")
     status_live_idx = diagnostics.find("if (hasFreshLivePhase(proxyInfo))", status_idx)
     status_failure_idx = diagnostics.find("if (hasFreshFailure(proxyInfo))", status_idx)
+    status_connecting_idx = diagnostics.find("currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy", status_idx)
     header_failure_idx = diagnostics.find("if (hasFreshFailure(proxyInfo))", header_idx)
+    header_connecting_idx = diagnostics.find("currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy", header_idx)
     require(
         status_idx >= 0
         and status_live_idx >= 0
@@ -86,6 +88,15 @@ def main() -> None:
         and status_live_idx < status_failure_idx
         and header_live_idx < header_failure_idx,
         "current proxy live stages must override stale proxy-check failures in row and header text",
+    )
+    require(
+        status_failure_idx >= 0
+        and status_connecting_idx >= 0
+        and status_failure_idx < status_connecting_idx
+        and header_failure_idx >= 0
+        and header_connecting_idx >= 0
+        and header_failure_idx < header_connecting_idx,
+        "fresh terminal failures must render before generic ConnectionStateConnectingToProxy text, otherwise the UI shows red 'waiting TCP'",
     )
     has_failure_idx = diagnostics.find("public static boolean hasFreshFailure")
     has_failure_body = diagnostics[has_failure_idx:diagnostics.find("public static String statusText", has_failure_idx)]

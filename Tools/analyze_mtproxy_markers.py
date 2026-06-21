@@ -60,6 +60,7 @@ FAKETLS_FAILURE_VERDICTS = {
     "client_hello_sent_no_server_hello",
     "server_hello_hmac_mismatch",
     "hmac_ok_but_on_connected_not_reached",
+    "mtproxy_packet_sent_no_response",
     "post_handshake_no_appdata",
     "peer_closed_after_client_hello",
 }
@@ -223,6 +224,7 @@ class Attempt:
             "first_tls_app_recv": "first_tls_app_recv",
             "first_mtproxy_packet_sent": "first_mtproxy_packet_sent",
             "first_mtproxy_packet_recv": "first_mtproxy_packet_recv",
+            "mtproxy_packet_sent_no_response": "mtproxy_packet_sent_no_response",
             "tls_alert": "tls_alert",
             "recv_eof": "recv_eof",
             "EPOLLHUP": "epoll_hup",
@@ -659,6 +661,7 @@ def print_plain_mtproxy_summary(attempts: list[Attempt]) -> None:
         stats["connected"] += 1 if attempt.events["on_connected"] or attempt.events["account_connected"] else 0
         stats["first_packet_sent"] += attempt.events["first_mtproxy_packet_sent"]
         stats["first_packet_recv"] += attempt.events["first_mtproxy_packet_recv"]
+        stats["packet_sent_no_response"] += attempt.events["mtproxy_packet_sent_no_response"]
         stats["send"] += attempt.events["account_send_message"]
         stats["recv"] += attempt.events["account_received_message"]
         stats["rpc_result"] += attempt.events["account_rpc_result"]
@@ -691,6 +694,7 @@ def print_plain_mtproxy_summary(attempts: list[Attempt]) -> None:
             f"connected={stats['connected']}",
             f"first_packet_sent={stats['first_packet_sent']}",
             f"first_packet_recv={stats['first_packet_recv']}",
+            f"packet_sent_no_response={stats['packet_sent_no_response']}",
             f"send={stats['send']}",
             f"recv={stats['recv']}",
             f"rpc_result={stats['rpc_result']}",
@@ -1019,6 +1023,7 @@ def write_csv_reports(attempts: list[Attempt], out_dir: Path) -> None:
         stats["connected"] += 1 if attempt.events["on_connected"] or attempt.events["account_connected"] else 0
         stats["first_packet_sent"] += attempt.events["first_mtproxy_packet_sent"]
         stats["first_packet_recv"] += attempt.events["first_mtproxy_packet_recv"]
+        stats["packet_sent_no_response"] += attempt.events["mtproxy_packet_sent_no_response"]
         stats["send"] += attempt.events["account_send_message"]
         stats["recv"] += attempt.events["account_received_message"]
         stats["rpc_result"] += attempt.events["account_rpc_result"]
@@ -1042,6 +1047,7 @@ def write_csv_reports(attempts: list[Attempt], out_dir: Path) -> None:
             "connected",
             "first_packet_sent",
             "first_packet_recv",
+            "packet_sent_no_response",
             "send",
             "recv",
             "rpc_result",
@@ -1070,6 +1076,7 @@ def write_csv_reports(attempts: list[Attempt], out_dir: Path) -> None:
                     "connected": stats["connected"],
                     "first_packet_sent": stats["first_packet_sent"],
                     "first_packet_recv": stats["first_packet_recv"],
+                    "packet_sent_no_response": stats["packet_sent_no_response"],
                     "send": stats["send"],
                     "recv": stats["recv"],
                     "rpc_result": stats["rpc_result"],
@@ -1145,6 +1152,7 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
     print("- connected_without_socket_connected_marker: Telegram reached on_connected, but this log slice has no socket_connected marker; do not treat it as a TCP failure.")
     print("- client_hello_sent_no_server_hello: compare VPN vs non-VPN; with VPN failure points to server/client compatibility, without VPN it can be DPI blackhole.")
     print("- server_hello_hmac_mismatch: likely ClientHello/profile/server response mismatch, not plain packet loss.")
+    print("- mtproxy_packet_sent_no_response: plain dd TCP opened and the first MTProxy packet was sent, but no server reply arrived.")
     print("- post_handshake_no_appdata: HMAC passed; inspect TLS app-data write/read path and first MTProto packets.")
     print("- dropped_after_appdata: startup worked; look at later MTProto keepalive, server close, or external throttling.")
     print("- proxy_check fail:tcp_not_connected: TCP/connect/DNS/server availability layer; compare with VPN and external probe.")

@@ -46,8 +46,10 @@ static bool mtProxyDiagnosticNeedsReconnectBackoff(const char *diagnostic) {
     if (diagnostic == nullptr) {
         return false;
     }
-    return strcmp(diagnostic, "client_hello_sent_no_server_hello") == 0 ||
+    return strcmp(diagnostic, "tcp_connected_no_pong") == 0 ||
+           strcmp(diagnostic, "client_hello_sent_no_server_hello") == 0 ||
            strcmp(diagnostic, "server_hello_hmac_mismatch") == 0 ||
+           strcmp(diagnostic, "mtproxy_packet_sent_no_response") == 0 ||
            strcmp(diagnostic, "post_handshake_no_appdata") == 0;
 }
 
@@ -845,8 +847,6 @@ void Connection::onConnected() {
     connectionState = TcpConnectionStageConnected;
     connectionToken = lastConnectionToken++;
     wasConnected = true;
-    mtProxyReconnectBackoffMs = 0;
-    mtProxyReconnectHoldUntil = 0;
     if (LOGS_ENABLED) DEBUG_D("connection(%p, account%u, dc%u, type %d) connected to %s:%hu", this, currentDatacenter->instanceNum, currentDatacenter->getDatacenterId(), connectionType, hostAddress.c_str(), hostPort);
     ConnectionsManager::getInstance(currentDatacenter->instanceNum).onConnectionConnected(this);
 }

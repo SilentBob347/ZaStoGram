@@ -134,6 +134,7 @@ def main():
         handle.write("logcat.txt:39: connection(0x4, account0, dc2, type 2) send message getFile\n")
         handle.write("logcat.txt:39: connection(0x4, account0, dc2, type 2) reset auth key due to -404 error\n")
         handle.write("logcat.txt:40: connection(0x4, account0, dc2, type 2) received invalid packet length\n")
+        handle.write("logcat.txt:40: connection(0x4) mtproxy_startup close_diagnostic phase=mtproxy_packet_sent_no_response\n")
         handle.write("logcat.txt:41: connection(0x4, account0, dc2, type 2) disconnected with reason 2\n")
     try:
         with tempfile.TemporaryDirectory() as csv_dir:
@@ -211,11 +212,11 @@ def main():
         "analyzer must summarize non-FakeTLS MTProxy traffic separately from FakeTLS",
     )
     require(
-        "plain.example:443 dd account0 dc2 type1: socket_connected=1 connected=1 first_packet_sent=1 first_packet_recv=1 send=1 recv=1 rpc_result=1" in result.stdout,
+        "plain.example:443 dd account0 dc2 type1: socket_connected=1 connected=1 first_packet_sent=1 first_packet_recv=1 packet_sent_no_response=0 send=1 recv=1 rpc_result=1" in result.stdout,
         "plain MTProxy summary must show successful account/dc/type traffic",
     )
     require(
-        "plain.example:443 dd account0 dc2 type2: socket_connected=1 connected=1 first_packet_sent=1 first_packet_recv=0 send=1 recv=0 rpc_result=0 invalid_packet_length=1 auth_404=1 disconnect_2=1" in result.stdout,
+        "plain.example:443 dd account0 dc2 type2: socket_connected=1 connected=1 first_packet_sent=1 first_packet_recv=0 packet_sent_no_response=1 send=1 recv=0 rpc_result=0 invalid_packet_length=1 auth_404=1 disconnect_2=1" in result.stdout,
         "plain MTProxy summary must expose broken download/media lifecycle separately",
     )
     require(

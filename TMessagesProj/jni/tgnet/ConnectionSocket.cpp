@@ -2537,7 +2537,7 @@ void ConnectionSocket::markMtProxyFirstPlainDataSent(uint32_t bytes) {
         return;
     }
     mtproxyFirstPlainDataSentLogged = true;
-    proxyCheckDiagnostic = "post_handshake_no_appdata";
+    proxyCheckDiagnostic = "mtproxy_packet_sent_no_response";
     publishProxyConnectionStage("first_mtproxy_packet_sent");
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup first_mtproxy_packet_sent bytes=%u secret_kind=%s", this, bytes, currentSecretKind);
 }
@@ -2570,6 +2570,7 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d reason_text=%s error=%d error_text=%s secret_kind=%s is_faketls=%d is_wss=%d proxy_state=%d tls_state=%d bytes_read=%zu pending_hello=%u/%u pending=%u/%u first_tls_sent=%d first_tls_recv=%d first_plain_sent=%d first_plain_recv=%d", this, reason, mtProxyDisconnectReasonName(reason), error, mtProxySocketErrorName(error), currentSecretKind, currentSecretIsFakeTls ? 1 : 0, currentTransportWss ? 1 : 0, (int) proxyAuthState, (int) tlsState, bytesRead, pendingClientHelloOffset, pendingClientHelloSize, pendingTlsFrameOffset, pendingTlsFrameSize, mtproxyFirstTlsFrameSentLogged ? 1 : 0, mtproxyFirstTlsDataReceivedLogged ? 1 : 0, mtproxyFirstPlainDataSentLogged ? 1 : 0, mtproxyFirstPlainDataReceivedLogged ? 1 : 0);
     rotateMtProxyTlsProfileOnFailureIfNeeded(reason, error);
     if (reason != 0 && isCurrentMtProxyConnection() && !proxyCheckDiagnostic.empty()) {
+        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup close_diagnostic phase=%s", this, proxyCheckDiagnostic.c_str());
         publishProxyConnectionStage(proxyCheckDiagnostic.c_str());
     }
     releaseProxyHandshakeAdmission(false, "closeSocket");
