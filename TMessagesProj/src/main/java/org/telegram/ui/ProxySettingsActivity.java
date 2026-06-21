@@ -222,9 +222,7 @@ public class ProxySettingsActivity extends BaseFragment {
     }
 
     private static int normalizeWssEditorTransportMode(int mode) {
-        return SharedConfig.normalizeWssTransportMode(mode) == SharedConfig.TRANSPORT_WSS_SOCKS5
-                ? SharedConfig.TRANSPORT_WSS_SOCKS5
-                : SharedConfig.TRANSPORT_WSS_CUSTOM;
+        return SharedConfig.TRANSPORT_WSS_CUSTOM;
     }
 
     public ProxySettingsActivity(SharedConfig.ProxyInfo proxyInfo) {
@@ -267,11 +265,8 @@ public class ProxySettingsActivity extends BaseFragment {
                         return;
                     }
                     if (currentType == TYPE_WSS) {
-                        int mode = wssEditorTransportMode == SharedConfig.TRANSPORT_WSS_SOCKS5
-                                ? SharedConfig.TRANSPORT_WSS_SOCKS5
-                                : SharedConfig.TRANSPORT_WSS_CUSTOM;
                         SharedConfig.setWssTransport(
-                                mode,
+                                SharedConfig.TRANSPORT_WSS_CUSTOM,
                                 inputFields[FIELD_WSS_HOST].getText().toString(),
                                 Utilities.parseInt(inputFields[FIELD_PORT].getText().toString()),
                                 inputFields[FIELD_WSS_PATH].getText().toString(),
@@ -623,7 +618,7 @@ public class ProxySettingsActivity extends BaseFragment {
                     if (params.length() != 0) {
                         params.append("&");
                     }
-                    params.append("mode=").append(wssEditorTransportMode == SharedConfig.TRANSPORT_WSS_SOCKS5 ? "socks5" : "custom");
+                    params.append("mode=custom");
                     params.append("&");
                     params.append("path=").append(URLEncoder.encode(inputFields[FIELD_WSS_PATH].getText().toString(), "UTF-8"));
                 } else if (currentType == TYPE_MTPROTO) {

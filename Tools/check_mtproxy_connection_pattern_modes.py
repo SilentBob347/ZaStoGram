@@ -144,18 +144,31 @@ def main() -> None:
     )
     require(
         "tcpFailurePenalty" in socket_cpp
+        and "handshakeFailurePenalty" in socket_cpp
         and "mtProxyApplyTcpFailureCooldown(MtProxyHandshakeEndpointState &state, int64_t now, int32_t mode)" in socket_cpp
         and "admission_tcp_failure_cooldown" in socket_cpp
         and "proxyHandshakeClientHelloSentTime <= 0" in socket_cpp,
-        "repeated pre-ClientHello TCP failures must have their own cooldown marker instead of being mixed with JA4/ServerHello failures",
+        "pre-ClientHello TCP failures and post-ClientHello handshake failures must have separate cooldown markers instead of being mixed together",
     )
     require(
         "mtProxyCooldownBlocksPriority" in socket_cpp
         and "state.tcpFailurePenalty > 0" in socket_cpp
+        and "state.handshakeFailurePenalty > 0" in socket_cpp
         and "return priority > MT_PROXY_HANDSHAKE_PRIORITY_BYPASS;" in socket_cpp
         and "mtProxyCooldownBlocksPriority(state, now, mode, candidate.priority)" in socket_cpp
         and "mtProxyCooldownBlocksPriority(state, now, connectionPatternMode, proxyHandshakeAdmissionPriority)" in socket_cpp,
-        "TCP-fail cooldown must throttle generic/media reconnect storms, not only low-priority download/upload attempts",
+        "TCP and post-ClientHello cooldowns must throttle generic/media reconnect storms, not only low-priority download/upload attempts",
+    )
+    require(
+        "if ((int64_t) delay < cooldownDelay)" in socket_cpp
+        and "delay = (uint32_t) cooldownDelay;" in socket_cpp,
+        "queued admission retry timers must wait until cooldown expires instead of waking repeatedly inside cooldown",
+    )
+    require(
+        "bool suppressQueuedGrant = !succeeded && wasActive && proxyHandshakeClientHelloSentTime > 0" in socket_cpp
+        and "admission_hold_after_client_hello_failure" in socket_cpp
+        and "if (hadAdmission && !suppressQueuedGrant && mtProxyConnectionPatternUsesAdmission(connectionPatternMode))" in socket_cpp,
+        "post-ClientHello failures must not immediately dequeue another socket and recreate the slot -> ClientHello loop",
     )
     require(
         "MT_PROXY_HANDSHAKE_TIMER_HOST_RESOLVE" in socket_cpp
@@ -164,6 +177,13 @@ def main() -> None:
         and "requestPendingHostResolve()" in socket_cpp
         and "scheduleProxyHandshakeAdmissionIfNeeded(ipv6, MT_PROXY_HANDSHAKE_TIMER_HOST_RESOLVE)" in socket_cpp,
         "FakeTLS DNS resolution must be admitted before delegate getHostByName, otherwise DNS/TCP failures bypass the browser-like gate",
+    )
+    require(
+        "bool hadAdmission = proxyHandshakeAdmissionActive || proxyHandshakeAdmissionQueued;" in socket_cpp
+        and "admission_release_ignored" in socket_cpp
+        and "proxyHandshakeAdmissionKey.clear();" in socket_cpp
+        and "if (hadAdmission && !suppressQueuedGrant && mtProxyConnectionPatternUsesAdmission(connectionPatternMode))" in socket_cpp,
+        "admission release must be idempotent so post-handshake close/suspend cannot dequeue a second queued request",
     )
     host_timer_index = socket_cpp.find("if (mode == MT_PROXY_HANDSHAKE_TIMER_HOST_RESOLVE)")
     host_request_index = socket_cpp.find("requestPendingHostResolve();", host_timer_index)

@@ -146,7 +146,8 @@ def main() -> None:
         "ConnectionSocket must use runtime connection-pattern state instead of a compile-time disabled flag",
     )
     require(
-        "if (mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {\n        hasNextRequest = mtProxyTakeNextQueuedRequestLocked" in socket_cpp,
+        ("if (mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {\n        hasNextRequest = mtProxyTakeNextQueuedRequestLocked" in socket_cpp
+         or "if (hadAdmission && !suppressQueuedGrant && mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {\n            hasNextRequest = mtProxyTakeNextQueuedRequestLocked" in socket_cpp),
         "ConnectionSocket must not grant queued admission requests after the runtime gate is disabled",
     )
     for path in (STRINGS, STRINGS_RU):

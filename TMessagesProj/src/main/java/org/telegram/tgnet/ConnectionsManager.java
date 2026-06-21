@@ -886,7 +886,9 @@ public class ConnectionsManager extends BaseController {
         AndroidUtilities.runOnUIThread(() -> {
             String normalizedDiagnostic = ProxyCheckDiagnostics.normalize(diagnostic);
             SharedConfig.ProxyInfo currentProxy = SharedConfig.currentProxy;
-            if (currentProxy != null && ProxyCheckDiagnostics.isLivePhase(normalizedDiagnostic)) {
+            boolean concreteDiagnostic = ProxyCheckDiagnostics.isLivePhase(normalizedDiagnostic)
+                    || (ProxyCheckDiagnostics.isFailure(normalizedDiagnostic) && !ProxyCheckDiagnostics.UNKNOWN_FAIL.equals(normalizedDiagnostic));
+            if (currentProxy != null && concreteDiagnostic) {
                 currentProxy.lastCheckDiagnostic = normalizedDiagnostic;
                 currentProxy.lastCheckDiagnosticTime = SystemClock.elapsedRealtime();
             }
@@ -1055,7 +1057,7 @@ public class ConnectionsManager extends BaseController {
 
     private static int resolveWssTransportMode() {
         int mode = SharedConfig.normalizeWssTransportMode(SharedConfig.wssTransportMode);
-        if (mode == WSS_TRANSPORT_CUSTOM || mode == WSS_TRANSPORT_SOCKS5) {
+        if (mode == WSS_TRANSPORT_CUSTOM) {
             if (TextUtils.isEmpty(SharedConfig.wssHost)) {
                 return WSS_TRANSPORT_OFF;
             }
@@ -1074,7 +1076,7 @@ public class ConnectionsManager extends BaseController {
     private static WssSocksProxy resolveWssSocksProxy(int mode) {
         WssSocksProxy proxy = new WssSocksProxy();
         SharedConfig.loadProxyList();
-        if (mode != WSS_TRANSPORT_SOCKS5 || SharedConfig.currentProxy == null) {
+        if (mode == WSS_TRANSPORT_OFF || SharedConfig.currentProxy == null) {
             return proxy;
         }
         if (!TextUtils.isEmpty(SharedConfig.currentProxy.secret) || TextUtils.isEmpty(SharedConfig.currentProxy.address)) {

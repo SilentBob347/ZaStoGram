@@ -65,6 +65,12 @@ public:
 
 private:
     enum class State {
+        TcpSocksGreetingWrite,
+        TcpSocksGreetingRead,
+        TcpSocksPasswordAuthWrite,
+        TcpSocksPasswordAuthRead,
+        TcpSocksConnectWrite,
+        TcpSocksConnectRead,
         TlsHandshake,
         HttpWrite,
         HttpRead,
@@ -99,7 +105,13 @@ private:
     bool buildSocks5Connect(std::vector<uint8_t> &out, const std::string &host, uint16_t port) const;
     bool flushPending(std::string *diagnostic);
     bool readIntoBuffer(std::string *diagnostic);
+    bool readRawIntoBuffer(std::string *diagnostic);
     bool collectSocksPayloads(std::string *diagnostic);
+    bool isTcpSocksWriteState() const;
+    bool isTcpSocksReadState() const;
+    bool parseRawSocksGreetingResponse(std::string *diagnostic, bool &passwordSelected);
+    bool parseRawSocksPasswordAuthResponse(std::string *diagnostic);
+    bool parseRawSocksConnectResponse(std::string *diagnostic);
     bool parseHttpResponse(std::string *diagnostic);
     bool parseSocksGreetingResponse(std::string *diagnostic, bool allowPassword, bool &passwordSelected);
     bool parseSocksPasswordAuthResponse(std::string *diagnostic);

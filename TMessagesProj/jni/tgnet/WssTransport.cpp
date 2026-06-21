@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
+#include <sys/socket.h>
 
 static constexpr const char *OFFICIAL_WSS_RELAY_IP = "149.154.167.220";
 static constexpr const char *OFFICIAL_WSS_PATH = "/apiws";
@@ -120,7 +122,7 @@ WssRouteConfig WssTransport::customRoute(
     route.upstreamSocksPort = upstreamSocksPort == 0 ? 1080 : upstreamSocksPort;
     route.upstreamSocksUsername = upstreamSocksUsername;
     route.upstreamSocksPassword = upstreamSocksPassword;
-    route.upstreamSocksEnabled = route.socks5OverWss && upstreamSocksEnabled && !route.upstreamSocksAddress.empty();
+    route.upstreamSocksEnabled = upstreamSocksEnabled && !route.upstreamSocksAddress.empty();
     return route;
 }
 
@@ -141,11 +143,21 @@ bool WssTransport::connect(int socketFd, const WssRouteConfig &routeConfig) {
     }
     SSL_set_fd(ssl, fd);
     SSL_set_connect_state(ssl);
-    state = State::TlsHandshake;
     pendingOutput.clear();
     pendingOutputOffset = 0;
     inputBuffer.clear();
     socksInputBuffer.clear();
+    if (config.upstreamSocksEnabled && !config.socks5OverWss) {
+        std::vector<uint8_t> greeting;
+        if (!buildSocks5Greeting(greeting, true)) {
+            return false;
+        }
+        pendingOutput = std::move(greeting);
+        state = State::TcpSocksGreetingWrite;
+        if (LOGS_ENABLED) DEBUG_D("wss_tcp_socks start socks=%s:%u domain=%s:%u", config.upstreamSocksAddress.c_str(), (uint32_t) config.upstreamSocksPort, config.domain.c_str(), (uint32_t) config.relayPort);
+    } else {
+        state = State::TlsHandshake;
+    }
     if (LOGS_ENABLED) DEBUG_D("wss_startup transport=connect mode=%d domain=%s path=%s socks=%d upstream_socks=%s:%u upstream_enabled=%d", config.mode, config.domain.c_str(), config.path.c_str(), config.socks5OverWss ? 1 : 0, config.upstreamSocksAddress.c_str(), (uint32_t) config.upstreamSocksPort, config.upstreamSocksEnabled ? 1 : 0);
     return true;
 }
@@ -195,7 +207,11 @@ bool WssTransport::pump(std::vector<std::vector<uint8_t>> &payloads, std::string
     if (!flushPending(diagnostic)) {
         return false;
     }
-    if (state == State::HttpRead
+    if (isTcpSocksReadState()) {
+        if (!readRawIntoBuffer(diagnostic)) {
+            return false;
+        }
+    } else if (state == State::HttpRead
             || state == State::GatewaySocksGreetingRead
             || state == State::GatewaySocksConnectRead
             || state == State::UpstreamSocksGreetingRead
@@ -203,6 +219,78 @@ bool WssTransport::pump(std::vector<std::vector<uint8_t>> &payloads, std::string
             || state == State::UpstreamSocksConnectRead
             || state == State::Ready) {
         if (!readIntoBuffer(diagnostic)) {
+            return false;
+        }
+    }
+    if (state == State::TcpSocksGreetingRead) {
+        std::string parseDiagnostic;
+        bool passwordSelected = false;
+        if (parseRawSocksGreetingResponse(&parseDiagnostic, passwordSelected)) {
+            if (passwordSelected) {
+                std::vector<uint8_t> auth;
+                if (!buildSocks5PasswordAuth(auth)) {
+                    if (diagnostic != nullptr) {
+                        *diagnostic = "wss_tcp_socks_auth_build_failed";
+                    }
+                    return false;
+                }
+                pendingOutput = std::move(auth);
+                pendingOutputOffset = 0;
+                state = State::TcpSocksPasswordAuthWrite;
+            } else {
+                std::vector<uint8_t> request;
+                const std::string &connectHost = !config.domain.empty() ? config.domain : config.relayIp;
+                if (!buildSocks5Connect(request, connectHost, config.relayPort)) {
+                    if (diagnostic != nullptr) {
+                        *diagnostic = "wss_tcp_socks_connect_build_failed";
+                    }
+                    return false;
+                }
+                pendingOutput = std::move(request);
+                pendingOutputOffset = 0;
+                state = State::TcpSocksConnectWrite;
+            }
+        } else if (!parseDiagnostic.empty()) {
+            if (diagnostic != nullptr) {
+                *diagnostic = parseDiagnostic;
+            }
+            return false;
+        }
+    }
+    if (state == State::TcpSocksPasswordAuthRead) {
+        std::string parseDiagnostic;
+        if (parseRawSocksPasswordAuthResponse(&parseDiagnostic)) {
+            std::vector<uint8_t> request;
+            const std::string &connectHost = !config.domain.empty() ? config.domain : config.relayIp;
+            if (!buildSocks5Connect(request, connectHost, config.relayPort)) {
+                if (diagnostic != nullptr) {
+                    *diagnostic = "wss_tcp_socks_connect_build_failed";
+                }
+                return false;
+            }
+            pendingOutput = std::move(request);
+            pendingOutputOffset = 0;
+            state = State::TcpSocksConnectWrite;
+        } else if (!parseDiagnostic.empty()) {
+            if (diagnostic != nullptr) {
+                *diagnostic = parseDiagnostic;
+            }
+            return false;
+        }
+    }
+    if (state == State::TcpSocksConnectRead) {
+        std::string parseDiagnostic;
+        if (parseRawSocksConnectResponse(&parseDiagnostic)) {
+            inputBuffer.clear();
+            state = State::TlsHandshake;
+            if (LOGS_ENABLED) DEBUG_D("wss_tcp_socks connect_ok socks=%s:%u domain=%s:%u", config.upstreamSocksAddress.c_str(), (uint32_t) config.upstreamSocksPort, config.domain.c_str(), (uint32_t) config.relayPort);
+            if (!pumpTls(diagnostic)) {
+                return false;
+            }
+        } else if (!parseDiagnostic.empty()) {
+            if (diagnostic != nullptr) {
+                *diagnostic = parseDiagnostic;
+            }
             return false;
         }
     }
@@ -478,14 +566,25 @@ bool WssTransport::buildSocks5Connect(std::vector<uint8_t> &out, const std::stri
 
 bool WssTransport::flushPending(std::string *diagnostic) {
     while (!pendingOutput.empty() && pendingOutputOffset < pendingOutput.size()) {
-        int rc = SSL_write(ssl, pendingOutput.data() + pendingOutputOffset, (int) (pendingOutput.size() - pendingOutputOffset));
+        int rc;
+        if (isTcpSocksWriteState()) {
+            rc = (int) ::send(fd, pendingOutput.data() + pendingOutputOffset, pendingOutput.size() - pendingOutputOffset, 0);
+        } else {
+            rc = SSL_write(ssl, pendingOutput.data() + pendingOutputOffset, (int) (pendingOutput.size() - pendingOutputOffset));
+        }
         if (rc > 0) {
             pendingOutputOffset += (size_t) rc;
             continue;
         }
-        int err = SSL_get_error(ssl, rc);
-        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
-            return true;
+        if (isTcpSocksWriteState()) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                return true;
+            }
+        } else {
+            int err = SSL_get_error(ssl, rc);
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                return true;
+            }
         }
         if (diagnostic != nullptr) {
             *diagnostic = "wss_write_failed";
@@ -497,9 +596,51 @@ bool WssTransport::flushPending(std::string *diagnostic) {
         pendingOutputOffset = 0;
         if (state == State::HttpWrite) {
             state = State::HttpRead;
+        } else if (state == State::TcpSocksGreetingWrite) {
+            state = State::TcpSocksGreetingRead;
+        } else if (state == State::TcpSocksPasswordAuthWrite) {
+            state = State::TcpSocksPasswordAuthRead;
+        } else if (state == State::TcpSocksConnectWrite) {
+            state = State::TcpSocksConnectRead;
         }
     }
     return true;
+}
+
+bool WssTransport::isTcpSocksWriteState() const {
+    return state == State::TcpSocksGreetingWrite
+            || state == State::TcpSocksPasswordAuthWrite
+            || state == State::TcpSocksConnectWrite;
+}
+
+bool WssTransport::isTcpSocksReadState() const {
+    return state == State::TcpSocksGreetingRead
+            || state == State::TcpSocksPasswordAuthRead
+            || state == State::TcpSocksConnectRead;
+}
+
+bool WssTransport::readRawIntoBuffer(std::string *diagnostic) {
+    uint8_t buffer[1024];
+    while (true) {
+        ssize_t rc = ::recv(fd, buffer, sizeof(buffer), 0);
+        if (rc > 0) {
+            inputBuffer.insert(inputBuffer.end(), buffer, buffer + rc);
+            continue;
+        }
+        if (rc == 0) {
+            if (diagnostic != nullptr) {
+                *diagnostic = "wss_tcp_socks_recv_eof";
+            }
+            return false;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+            return true;
+        }
+        if (diagnostic != nullptr) {
+            *diagnostic = "wss_tcp_socks_read_failed";
+        }
+        return false;
+    }
 }
 
 bool WssTransport::readIntoBuffer(std::string *diagnostic) {
@@ -558,6 +699,78 @@ bool WssTransport::collectSocksPayloads(std::string *diagnostic) {
     for (auto &payload : payloads) {
         socksInputBuffer.insert(socksInputBuffer.end(), payload.begin(), payload.end());
     }
+    return true;
+}
+
+bool WssTransport::parseRawSocksGreetingResponse(std::string *diagnostic, bool &passwordSelected) {
+    passwordSelected = false;
+    if (inputBuffer.size() < 2) {
+        return false;
+    }
+    if (inputBuffer[0] != 0x05) {
+        if (diagnostic != nullptr) {
+            *diagnostic = "wss_tcp_socks_auth_failed";
+        }
+        return false;
+    }
+    uint8_t method = inputBuffer[1];
+    if (method == 0x02) {
+        passwordSelected = true;
+    } else if (method != 0x00) {
+        if (diagnostic != nullptr) {
+            *diagnostic = "wss_tcp_socks_auth_method_failed";
+        }
+        return false;
+    }
+    inputBuffer.erase(inputBuffer.begin(), inputBuffer.begin() + 2);
+    return true;
+}
+
+bool WssTransport::parseRawSocksPasswordAuthResponse(std::string *diagnostic) {
+    if (inputBuffer.size() < 2) {
+        return false;
+    }
+    if (inputBuffer[0] != 0x01 || inputBuffer[1] != 0x00) {
+        if (diagnostic != nullptr) {
+            *diagnostic = "wss_tcp_socks_password_auth_failed";
+        }
+        return false;
+    }
+    inputBuffer.erase(inputBuffer.begin(), inputBuffer.begin() + 2);
+    return true;
+}
+
+bool WssTransport::parseRawSocksConnectResponse(std::string *diagnostic) {
+    if (inputBuffer.size() < 5) {
+        return false;
+    }
+    if (inputBuffer[0] != 0x05 || inputBuffer[1] != 0x00) {
+        if (diagnostic != nullptr) {
+            *diagnostic = "wss_tcp_socks_connect_failed";
+        }
+        return false;
+    }
+    uint8_t atyp = inputBuffer[3];
+    size_t total = 0;
+    if (atyp == 0x01) {
+        total = 10;
+    } else if (atyp == 0x04) {
+        total = 22;
+    } else if (atyp == 0x03) {
+        if (inputBuffer.size() < 5) {
+            return false;
+        }
+        total = 7 + inputBuffer[4];
+    } else {
+        if (diagnostic != nullptr) {
+            *diagnostic = "wss_tcp_socks_connect_atyp_failed";
+        }
+        return false;
+    }
+    if (inputBuffer.size() < total) {
+        return false;
+    }
+    inputBuffer.erase(inputBuffer.begin(), inputBuffer.begin() + total);
     return true;
 }
 

@@ -271,6 +271,7 @@
     <string name="ProxyStatusTcpConnecting">Открываем TCP-соединение...</string>
     <string name="ProxyStatusTcpConnected">TCP открыт, начинаем TLS-маскировку...</string>
     <string name="ProxyStatusClientHelloSent">ClientHello отправлен, ждём ServerHello...</string>
+    <string name="ProxyStatusAdmissionHoldAfterClientHelloFailure">ServerHello не пришёл, ждём паузу перед повтором...</string>
     <string name="ProxyStatusServerHelloOk">ServerHello принят, запускаем MTProto...</string>
     <string name="ProxyStatusMtprotoStarting">MTProxy-рукопожатие прошло, запускаем MTProto...</string>
     <string name="ProxyStatusFirstDataSent">Первые MTProto-данные отправлены...</string>
@@ -333,13 +334,12 @@
     <string name="WssTransportOff">Выкл</string>
     <string name="WssTransportOfficial">Официальный</string>
     <string name="WssTransportCustom">Свой</string>
-    <string name="WssTransportSocks5">SOCKS5 WSS</string>
-    <string name="WssTransportInfo">WSS — отдельный транспорт Telegram. Официальный режим использует WebSocket-релеи Telegram и не требует VPS. Свой и SOCKS5 WSS требуют собственного WebSocket-шлюза.</string>
+    <string name="WssTransportInfo">WSS — отдельный транспорт Telegram. Официальный режим использует WebSocket-релеи Telegram и не требует VPS. Свой режим требует собственного WebSocket-шлюза.</string>
     <string name="UseProxyWss">WSS шлюз</string>
     <string name="UseProxyWssHost">WSS хост</string>
     <string name="UseProxyWssPath">WSS путь</string>
-    <string name="UseProxyWssMiniApps">Mini Apps через WSS</string>
-    <string name="UseProxyWssInfo">Свой WSS — это не MTProxy и не SOCKS5. SOCKS5 WSS может также вести Mini Apps, если ваш шлюз поддерживает SOCKS5-поток внутри WebSocket.</string>
+    <string name="UseProxyWssMiniApps">Mini Apps через выбранный SOCKS</string>
+    <string name="UseProxyWssInfo">Свой WSS — это не MTProxy и не SOCKS-прокси. Когда WSS включен, выбранный SOCKS5 может использоваться как upstream для WSS.</string>
     <string name="WssSocksUpstreamHeader">SOCKS5 upstream для WSS</string>
-    <string name="WssSocksUpstreamInfo">Здесь показываются только SOCKS5. Выбранный SOCKS5 используется внутри SOCKS5 WSS; MTProxy скрыты.</string>
+    <string name="WssSocksUpstreamInfo">Здесь показываются только SOCKS5. Выбранный SOCKS5 используется как upstream для WSS; MTProxy скрыты.</string>
 </resources>

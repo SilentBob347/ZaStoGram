@@ -167,6 +167,7 @@ struct MtProxyHandshakeEndpointState {
     int32_t recentSuccesses = 0;
     int32_t freezePenalty = 0;
     int32_t tcpFailurePenalty = 0;
+    int32_t handshakeFailurePenalty = 0;
     int64_t lastGrantTime = 0;
     int64_t lastSuccessTime = 0;
     int64_t cooldownUntil = 0;
@@ -260,6 +261,9 @@ static bool mtProxyCooldownBlocksPriority(const MtProxyHandshakeEndpointState &s
     if (state.tcpFailurePenalty > 0) {
         return priority > MT_PROXY_HANDSHAKE_PRIORITY_BYPASS;
     }
+    if (state.freezePenalty > 0 || state.handshakeFailurePenalty > 0) {
+        return priority > MT_PROXY_HANDSHAKE_PRIORITY_BYPASS;
+    }
     return priority > MT_PROXY_HANDSHAKE_PRIORITY_MEDIA;
 }
 
@@ -345,7 +349,7 @@ static uint32_t mtProxyHandshakeRetryDelay(int64_t now, int64_t cooldownUntil, i
         if (cooldownDelay > maxDelay) {
             cooldownDelay = maxDelay;
         }
-        if ((int64_t) delay > cooldownDelay) {
+        if ((int64_t) delay < cooldownDelay) {
             delay = (uint32_t) cooldownDelay;
         }
     }
@@ -438,6 +442,7 @@ static void mtProxyApplyFreezeCooldown(MtProxyHandshakeEndpointState &state, int
         state.freezePenalty++;
     }
     state.tcpFailurePenalty = 0;
+    state.handshakeFailurePenalty = 0;
     state.recentSuccesses = 0;
     int64_t base;
     int64_t jitter;
@@ -485,6 +490,7 @@ static void mtProxyApplyTcpFailureCooldown(MtProxyHandshakeEndpointState &state,
     if (state.tcpFailurePenalty < 3) {
         state.tcpFailurePenalty++;
     }
+    state.handshakeFailurePenalty = 0;
     state.recentSuccesses = 0;
     int64_t base;
     int64_t jitter;
@@ -533,6 +539,9 @@ static void mtProxyApplyFailureCooldown(MtProxyHandshakeEndpointState &state, in
         return;
     }
     state.tcpFailurePenalty = 0;
+    if (state.handshakeFailurePenalty < 3) {
+        state.handshakeFailurePenalty++;
+    }
     state.recentSuccesses = 0;
     int64_t base;
     int64_t jitter;
@@ -567,6 +576,7 @@ static void mtProxyRecordHandshakeSuccess(MtProxyHandshakeEndpointState &state, 
     state.lastSuccessTime = now;
     state.freezePenalty = 0;
     state.tcpFailurePenalty = 0;
+    state.handshakeFailurePenalty = 0;
     state.cooldownUntil = 0;
 }
 
@@ -1652,6 +1662,8 @@ void ConnectionSocket::cancelProxyHandshakeAdmission() {
 void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char *reason) {
     if (proxyHandshakeAdmissionKey.empty()) {
         proxyHandshakeAdmissionActive = false;
+        proxyHandshakeAdmissionQueued = false;
+        proxyHandshakeAdmissionReady = false;
         return;
     }
 
@@ -1660,38 +1672,55 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
     uint32_t nextGrantDelay = 0;
     int64_t now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
-    pthread_mutex_lock(&proxyHandshakeSchedulerMutex);
-    MtProxyHandshakeEndpointState &state = proxyHandshakeEndpoints[proxyHandshakeAdmissionKey];
-    mtProxyRemoveQueuedRequestLocked(this);
-    if (proxyHandshakeAdmissionActive && state.activeHandshakes > 0) {
-        state.activeHandshakes--;
-    }
-    int64_t clientHelloElapsed = proxyHandshakeClientHelloSentTime > 0 ? now - proxyHandshakeClientHelloSentTime : 0;
-    bool shouldApplyFreezeCooldown = proxyHandshakeAdmissionActive && proxyHandshakeClientHelloSentTime > 0 && clientHelloElapsed >= MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS;
-    bool shouldApplyTcpFailureCooldown = proxyHandshakeAdmissionActive && proxyHandshakeClientHelloSentTime <= 0 && strcmp(reason, "cancel") != 0;
-    if (succeeded) {
-        mtProxyRecordHandshakeSuccess(state, now);
-    } else if (shouldApplyTcpFailureCooldown && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
-        mtProxyApplyTcpFailureCooldown(state, now, connectionPatternMode);
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_tcp_failure_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str(), state.tcpFailurePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
-    } else if (shouldApplyFreezeCooldown && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
-        mtProxyApplyFreezeCooldown(state, now, connectionPatternMode);
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str(), state.freezePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
-    } else if (!succeeded && proxyHandshakeAdmissionActive && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
-        mtProxyApplyFailureCooldown(state, now, connectionPatternMode);
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_failure_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str(), (long) std::max<int64_t>(0, state.cooldownUntil - now));
-    } else if (shouldApplyFreezeCooldown) {
-        state.recentSuccesses = 0;
-        if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_observed admission_mode=%s connection_pattern=%s reason=%s key=%s cooldown=disabled", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str());
-    }
-    if (mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {
-        hasNextRequest = mtProxyTakeNextQueuedRequestLocked(proxyHandshakeAdmissionKey, state, now, connectionPatternMode, nextRequest);
-        if (hasNextRequest) {
-            nextGrantDelay = mtProxyHandshakeGrantDelay(connectionPatternMode);
-            mtProxyRecordHandshakeGrant(state, now, nextGrantDelay);
+    bool hadAdmission = proxyHandshakeAdmissionActive || proxyHandshakeAdmissionQueued;
+    bool wasActive = proxyHandshakeAdmissionActive;
+    bool suppressQueuedGrant = !succeeded && wasActive && proxyHandshakeClientHelloSentTime > 0 && strcmp(reason, "cancel") != 0;
+    bool publishHoldPhase = false;
+    std::string admissionKey = proxyHandshakeAdmissionKey;
+    if (hadAdmission) {
+        pthread_mutex_lock(&proxyHandshakeSchedulerMutex);
+        MtProxyHandshakeEndpointState &state = proxyHandshakeEndpoints[admissionKey];
+        mtProxyRemoveQueuedRequestLocked(this);
+        if (wasActive && state.activeHandshakes > 0) {
+            state.activeHandshakes--;
         }
+        int64_t clientHelloElapsed = proxyHandshakeClientHelloSentTime > 0 ? now - proxyHandshakeClientHelloSentTime : 0;
+        bool shouldApplyFreezeCooldown = wasActive && proxyHandshakeClientHelloSentTime > 0 && clientHelloElapsed >= MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS;
+        bool shouldApplyTcpFailureCooldown = wasActive && proxyHandshakeClientHelloSentTime <= 0 && strcmp(reason, "cancel") != 0;
+        if (succeeded) {
+            mtProxyRecordHandshakeSuccess(state, now);
+        } else if (shouldApplyTcpFailureCooldown && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
+            mtProxyApplyTcpFailureCooldown(state, now, connectionPatternMode);
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_tcp_failure_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, admissionKey.c_str(), state.tcpFailurePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
+        } else if (shouldApplyFreezeCooldown && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
+            mtProxyApplyFreezeCooldown(state, now, connectionPatternMode);
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, admissionKey.c_str(), state.freezePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
+        } else if (!succeeded && wasActive && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
+            mtProxyApplyFailureCooldown(state, now, connectionPatternMode);
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_failure_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, admissionKey.c_str(), state.handshakeFailurePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
+        } else if (shouldApplyFreezeCooldown) {
+            state.recentSuccesses = 0;
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_observed admission_mode=%s connection_pattern=%s reason=%s key=%s cooldown=disabled", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, admissionKey.c_str());
+        }
+        if (suppressQueuedGrant) {
+            publishHoldPhase = true;
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_hold_after_client_hello_failure admission_mode=%s connection_pattern=%s reason=%s key=%s queued=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, admissionKey.c_str(), (int) state.queuedRequests.size(), (long) std::max<int64_t>(0, state.cooldownUntil - now));
+        }
+        if (hadAdmission && !suppressQueuedGrant && mtProxyConnectionPatternUsesAdmission(connectionPatternMode)) {
+            hasNextRequest = mtProxyTakeNextQueuedRequestLocked(admissionKey, state, now, connectionPatternMode, nextRequest);
+            if (hasNextRequest) {
+                nextGrantDelay = mtProxyHandshakeGrantDelay(connectionPatternMode);
+                mtProxyRecordHandshakeGrant(state, now, nextGrantDelay);
+            }
+        }
+        pthread_mutex_unlock(&proxyHandshakeSchedulerMutex);
+    } else if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_startup admission_release_ignored admission_mode=%s connection_pattern=%s reason=%s success=%d key=%s", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, succeeded ? 1 : 0, admissionKey.c_str());
     }
-    pthread_mutex_unlock(&proxyHandshakeSchedulerMutex);
+
+    if (publishHoldPhase) {
+        publishProxyConnectionStage("admission_hold_after_client_hello_failure");
+    }
 
     proxyHandshakeAdmissionQueued = false;
     proxyHandshakeAdmissionActive = false;
@@ -1699,11 +1728,12 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
     proxyHandshakeAdmissionStartTime = 0;
     proxyHandshakeClientHelloSentTime = 0;
     proxyHandshakeAdmissionTimerMode = 0;
+    proxyHandshakeAdmissionKey.clear();
     if (proxyHandshakeAdmissionTimer != nullptr) {
         proxyHandshakeAdmissionTimer->stop();
     }
 
-    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_release admission_mode=%s connection_pattern=%s reason=%s success=%d key=%s next=%d", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, succeeded ? 1 : 0, proxyHandshakeAdmissionKey.c_str(), hasNextRequest ? 1 : 0);
+    if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_release admission_mode=%s connection_pattern=%s reason=%s success=%d key=%s next=%d", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, succeeded ? 1 : 0, admissionKey.c_str(), hasNextRequest ? 1 : 0);
     if (hasNextRequest && nextRequest.socket != nullptr) {
         nextRequest.socket->grantProxyHandshakeAdmission(nextRequest.ipv6, nextRequest.generation, nextGrantDelay, nextRequest.timerMode, reason);
     }
@@ -2137,6 +2167,13 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
                     manager.wssSocksPassword,
                     manager.wssSocksEnabled);
         }
+        if (shouldUseWss && manager.wssSocksEnabled && !manager.wssSocksHost.empty()) {
+            selectedWssRoute.upstreamSocksAddress = manager.wssSocksHost;
+            selectedWssRoute.upstreamSocksPort = manager.wssSocksPort == 0 ? 1080 : manager.wssSocksPort;
+            selectedWssRoute.upstreamSocksUsername = manager.wssSocksUsername;
+            selectedWssRoute.upstreamSocksPassword = manager.wssSocksPassword;
+            selectedWssRoute.upstreamSocksEnabled = true;
+        }
     }
 
     if (shouldUseWss) {
@@ -2144,19 +2181,26 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         currentSecretKind = "wss";
         proxyAuthState = 0;
         currentWssRoute = selectedWssRoute;
+        std::string wssConnectHost = currentWssRoute.relayIp;
+        uint16_t wssConnectPort = currentWssRoute.relayPort;
+        if (currentWssRoute.upstreamSocksEnabled && !currentWssRoute.socks5OverWss) {
+            wssConnectHost = currentWssRoute.upstreamSocksAddress;
+            wssConnectPort = currentWssRoute.upstreamSocksPort == 0 ? 1080 : currentWssRoute.upstreamSocksPort;
+            if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup connect_via_socks socks=%s:%u relay=%s:%u domain=%s", this, wssConnectHost.c_str(), (uint32_t) wssConnectPort, currentWssRoute.relayIp.c_str(), (uint32_t) currentWssRoute.relayPort, currentWssRoute.domain.c_str());
+        }
         if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) can't create WSS socket", this);
             closeSocket(1, -1);
             return;
         }
         socketAddress.sin_family = AF_INET;
-        socketAddress.sin_port = htons(currentWssRoute.relayPort);
+        socketAddress.sin_port = htons(wssConnectPort);
         bool continueCheckAddress = false;
-        if (inet_pton(AF_INET, currentWssRoute.relayIp.c_str(), &socketAddress.sin_addr.s_addr) != 1) {
+        if (inet_pton(AF_INET, wssConnectHost.c_str(), &socketAddress.sin_addr.s_addr) != 1) {
             continueCheckAddress = true;
         }
         if (continueCheckAddress) {
-            if (inet_pton(AF_INET6, currentWssRoute.relayIp.c_str(), &socketAddress6.sin6_addr.s6_addr) == 1) {
+            if (inet_pton(AF_INET6, wssConnectHost.c_str(), &socketAddress6.sin6_addr.s6_addr) == 1) {
                 if (close(socketFd) == 0) {
                     socketFd = socket(AF_INET6, SOCK_STREAM, 0);
                 }
@@ -2165,20 +2209,20 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
                     return;
                 }
                 socketAddress6.sin6_family = AF_INET6;
-                socketAddress6.sin6_port = htons(currentWssRoute.relayPort);
+                socketAddress6.sin6_port = htons(wssConnectPort);
                 ipv6 = true;
                 continueCheckAddress = false;
             }
         }
         if (continueCheckAddress) {
 #ifdef USE_DELEGATE_HOST_RESOLVE
-            waitingForHostResolve = currentWssRoute.relayIp;
-            ConnectionsManager::getInstance(instanceNum).delegate->getHostByName(currentWssRoute.relayIp, instanceNum, this);
+            waitingForHostResolve = wssConnectHost;
+            ConnectionsManager::getInstance(instanceNum).delegate->getHostByName(wssConnectHost, instanceNum, this);
             return;
 #else
             struct hostent *he;
-            if ((he = gethostbyname(currentWssRoute.relayIp.c_str())) == nullptr) {
-                if (LOGS_ENABLED) DEBUG_E("connection(%p) can't resolve WSS host %s address", this, currentWssRoute.relayIp.c_str());
+            if ((he = gethostbyname(wssConnectHost.c_str())) == nullptr) {
+                if (LOGS_ENABLED) DEBUG_E("connection(%p) can't resolve WSS host %s address", this, wssConnectHost.c_str());
                 closeSocket(1, -1);
                 return;
             }
@@ -2460,6 +2504,9 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_disconnect reason=%d reason_text=%s error=%d error_text=%s secret_kind=%s is_faketls=%d is_wss=%d proxy_state=%d tls_state=%d bytes_read=%zu pending_hello=%u/%u pending=%u/%u first_tls_sent=%d first_tls_recv=%d", this, reason, mtProxyDisconnectReasonName(reason), error, mtProxySocketErrorName(error), currentSecretKind, currentSecretIsFakeTls ? 1 : 0, currentTransportWss ? 1 : 0, (int) proxyAuthState, (int) tlsState, bytesRead, pendingClientHelloOffset, pendingClientHelloSize, pendingTlsFrameOffset, pendingTlsFrameSize, mtproxyFirstTlsFrameSentLogged ? 1 : 0, mtproxyFirstTlsDataReceivedLogged ? 1 : 0);
     rotateMtProxyTlsProfileOnFailureIfNeeded(reason, error);
+    if (reason != 0 && currentSecretIsFakeTls && !proxyCheckDiagnostic.empty()) {
+        publishProxyConnectionStage(proxyCheckDiagnostic.c_str());
+    }
     releaseProxyHandshakeAdmission(false, "closeSocket");
     cancelProxyHandshakeAdmission();
     ConnectionsManager::getInstance(instanceNum).detachConnection(this);

@@ -41,6 +41,11 @@ def main():
             "logcat.txt:7: connection(0x2) mtproxy_startup admission_freeze_detected "
             "key=blocked.example:443:cdn.example elapsed=4500\n"
         )
+        handle.write(
+            "logcat.txt:7: connection(0x2) mtproxy_startup admission_hold_after_client_hello_failure "
+            "admission_mode=strict connection_pattern=strict reason=freeze_timeout "
+            "key=blocked.example:443:cdn.example queued=2 cooldown_ms=5200\n"
+        )
         handle.write("logcat.txt:8: connection(0x2) mtproxy_startup server_hello_timeout_close elapsed=4500\n")
         handle.write(
             "logcat.txt:9: 06-20 15:00:00.200 connection(0x2) mtproxy_startup connect_start proxy_state=10 secret_kind=ee "
@@ -177,6 +182,10 @@ def main():
     require(
         "admission_tcp_failure_cooldown" in result.stdout,
         "analyzer must preserve the pre-ClientHello TCP-failure cooldown marker",
+    )
+    require(
+        "admission_hold_after_client_hello_failure" in result.stdout,
+        "analyzer must preserve the queued-admission hold marker after post-ClientHello failures",
     )
     require(
         "Java live connection stages:" in result.stdout

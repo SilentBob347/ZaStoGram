@@ -35,12 +35,21 @@ public class WssMiniAppProxyBridge {
     private static String currentSocksUsername = "";
     private static String currentSocksPassword = "";
     private static boolean currentSocksEnabled;
+    private static boolean currentUseWssGateway;
     private static int localPort;
 
     public static boolean shouldUseFromSettings() {
-        return SharedConfig.wssUseForMiniApps
-                && SharedConfig.wssTransportMode == SharedConfig.TRANSPORT_WSS_SOCKS5
-                && !TextUtils.isEmpty(SharedConfig.wssHost);
+        if (!SharedConfig.wssUseForMiniApps) {
+            return false;
+        }
+        int mode = SharedConfig.normalizeWssTransportMode(SharedConfig.wssTransportMode);
+        if (mode == SharedConfig.TRANSPORT_LEGACY_PROXY) {
+            return false;
+        }
+        if (mode == SharedConfig.TRANSPORT_WSS_CUSTOM) {
+            return !TextUtils.isEmpty(SharedConfig.wssHost);
+        }
+        return selectedSocksProxy().enabled;
     }
 
     public static boolean isRunning() {
@@ -68,12 +77,19 @@ public class WssMiniAppProxyBridge {
                 stopLocked();
                 return 0;
             }
-            String host = SharedConfig.wssHost.trim();
-            int port = SharedConfig.wssPort > 0 ? SharedConfig.wssPort : 443;
-            String path = SharedConfig.normalizeWssPath(SharedConfig.wssPath);
+            int mode = SharedConfig.normalizeWssTransportMode(SharedConfig.wssTransportMode);
+            boolean useWssGateway = mode == SharedConfig.TRANSPORT_WSS_CUSTOM;
+            String host = useWssGateway ? SharedConfig.wssHost.trim() : "";
+            int port = useWssGateway ? (SharedConfig.wssPort > 0 ? SharedConfig.wssPort : 443) : 0;
+            String path = useWssGateway ? SharedConfig.normalizeWssPath(SharedConfig.wssPath) : "";
             SocksProxyConfig socksProxy = selectedSocksProxy();
+            if (!useWssGateway && !socksProxy.enabled) {
+                stopLocked();
+                return 0;
+            }
             if (running
                     && serverSocket != null
+                    && useWssGateway == currentUseWssGateway
                     && TextUtils.equals(host, currentHost)
                     && port == currentPort
                     && TextUtils.equals(path, currentPath)
@@ -96,13 +112,14 @@ public class WssMiniAppProxyBridge {
                 currentSocksUsername = socksProxy.username;
                 currentSocksPassword = socksProxy.password;
                 currentSocksEnabled = socksProxy.enabled;
+                currentUseWssGateway = useWssGateway;
                 running = true;
                 ServerSocket socket = serverSocket;
                 acceptThread = new Thread(() -> acceptLoop(socket), "WssMiniAppProxyBridge");
                 acceptThread.setDaemon(true);
                 acceptThread.start();
                 if (BuildVars.LOGS_ENABLED) {
-                    FileLog.d("wss_miniapp bridge_started local_port=" + localPort + " gateway=" + currentHost + ":" + currentPort + currentPath + " upstream_socks=" + currentSocksHost + ":" + currentSocksPort + " upstream_enabled=" + (currentSocksEnabled ? 1 : 0));
+                    FileLog.d("wss_miniapp bridge_started local_port=" + localPort + " gateway_enabled=" + (currentUseWssGateway ? 1 : 0) + " gateway=" + currentHost + ":" + currentPort + currentPath + " upstream_socks=" + currentSocksHost + ":" + currentSocksPort + " upstream_enabled=" + (currentSocksEnabled ? 1 : 0));
                 }
                 return localPort;
             } catch (Exception e) {
@@ -130,6 +147,7 @@ public class WssMiniAppProxyBridge {
         currentSocksUsername = "";
         currentSocksPassword = "";
         currentSocksEnabled = false;
+        currentUseWssGateway = false;
     }
 
     private static void acceptLoop(ServerSocket socket) {
@@ -145,7 +163,8 @@ public class WssMiniAppProxyBridge {
                 String socksUsername = currentSocksUsername;
                 String socksPassword = currentSocksPassword;
                 boolean socksEnabled = currentSocksEnabled;
-                Thread thread = new Thread(() -> handleClient(client, host, port, path, socksHost, socksPort, socksUsername, socksPassword, socksEnabled), "WssMiniAppProxySession");
+                boolean useWssGateway = currentUseWssGateway;
+                Thread thread = new Thread(() -> handleClient(client, useWssGateway, host, port, path, socksHost, socksPort, socksUsername, socksPassword, socksEnabled), "WssMiniAppProxySession");
                 thread.setDaemon(true);
                 thread.start();
             } catch (IOException e) {
@@ -156,16 +175,47 @@ public class WssMiniAppProxyBridge {
         }
     }
 
-    private static void handleClient(Socket client, String gatewayHost, int gatewayPort, String gatewayPath, String socksHost, int socksPort, String socksUsername, String socksPassword, boolean socksEnabled) {
-        SSLSocket remote = null;
+    private static void handleClient(Socket client, boolean useWssGateway, String gatewayHost, int gatewayPort, String gatewayPath, String socksHost, int socksPort, String socksUsername, String socksPassword, boolean socksEnabled) {
+        Socket remote = null;
         try {
             client.setSoTimeout(30000);
             SocksTarget target = readLocalSocksConnect(client);
-            remote = (SSLSocket) SSLSocketFactory.getDefault().createSocket(gatewayHost, gatewayPort);
-            remote.setUseClientMode(true);
-            remote.setTcpNoDelay(true);
-            remote.setSoTimeout(30000);
-            remote.startHandshake();
+            if (!useWssGateway) {
+                if (!socksEnabled) {
+                    throw new IOException("miniapp upstream socks is not selected");
+                }
+                remote = new Socket(socksHost, socksPort);
+                remote.setTcpNoDelay(true);
+                remote.setSoTimeout(30000);
+                InputStream remoteIn = remote.getInputStream();
+                OutputStream remoteOut = remote.getOutputStream();
+                remoteOut.write(buildSocksGreeting(true, socksUsername, socksPassword));
+                remoteOut.flush();
+                boolean passwordAuth = readRawSocksGreetingResponse(remoteIn, true);
+                if (passwordAuth) {
+                    remoteOut.write(buildSocksPasswordAuth(socksUsername, socksPassword));
+                    remoteOut.flush();
+                    readRawSocksPasswordAuthResponse(remoteIn);
+                }
+                remoteOut.write(buildSocksConnect(target.host, target.port));
+                remoteOut.flush();
+                readRawSocksConnectResponse(remoteIn, "wss miniapp direct socks connect failed");
+                if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("wss_miniapp direct_upstream_connect_ok socks=" + socksHost + ":" + socksPort + " target=" + target.host + ":" + target.port);
+                }
+                writeLocalSocksSuccess(client.getOutputStream());
+                client.setSoTimeout(0);
+                remote.setSoTimeout(0);
+                bridgeRaw(client, remote);
+                return;
+            }
+
+            SSLSocket tlsRemote = (SSLSocket) SSLSocketFactory.getDefault().createSocket(gatewayHost, gatewayPort);
+            remote = tlsRemote;
+            tlsRemote.setUseClientMode(true);
+            tlsRemote.setTcpNoDelay(true);
+            tlsRemote.setSoTimeout(30000);
+            tlsRemote.startHandshake();
 
             InputStream remoteIn = remote.getInputStream();
             OutputStream remoteOut = remote.getOutputStream();
@@ -189,8 +239,8 @@ public class WssMiniAppProxyBridge {
             }
             writeLocalSocksSuccess(client.getOutputStream());
             client.setSoTimeout(0);
-            remote.setSoTimeout(0);
-            bridge(client, remote, remoteIn, remoteOut);
+            tlsRemote.setSoTimeout(0);
+            bridge(client, tlsRemote, remoteIn, remoteOut);
         } catch (Exception e) {
             if (BuildVars.LOGS_ENABLED) {
                 FileLog.e(e);
@@ -352,6 +402,45 @@ public class WssMiniAppProxyBridge {
         }
     }
 
+    private static boolean readRawSocksGreetingResponse(InputStream in, boolean allowPassword) throws IOException {
+        byte[] response = readFully(in, 2);
+        if (response[0] != 0x05) {
+            throw new IOException("miniapp socks auth failed");
+        }
+        if (response[1] == 0x02 && allowPassword) {
+            return true;
+        }
+        if (response[1] != 0x00) {
+            throw new IOException("miniapp socks auth method failed");
+        }
+        return false;
+    }
+
+    private static void readRawSocksPasswordAuthResponse(InputStream in) throws IOException {
+        byte[] response = readFully(in, 2);
+        if (response[0] != 0x01 || response[1] != 0x00) {
+            throw new IOException("miniapp socks password auth failed");
+        }
+    }
+
+    private static void readRawSocksConnectResponse(InputStream in, String message) throws IOException {
+        byte[] header = readFully(in, 4);
+        if (header[0] != 0x05 || header[1] != 0x00) {
+            throw new IOException(message);
+        }
+        int addressType = header[3] & 0xff;
+        if (addressType == 0x01) {
+            readFully(in, 4);
+        } else if (addressType == 0x04) {
+            readFully(in, 16);
+        } else if (addressType == 0x03) {
+            readFully(in, readByte(in));
+        } else {
+            throw new IOException("miniapp socks bad address type");
+        }
+        readFully(in, 2);
+    }
+
     private static void bridge(Socket client, SSLSocket remote, InputStream remoteIn, OutputStream remoteOut) throws IOException {
         InputStream clientIn = client.getInputStream();
         OutputStream clientOut = client.getOutputStream();
@@ -380,6 +469,42 @@ public class WssMiniAppProxyBridge {
                 break;
             }
             clientOut.write(payload);
+            clientOut.flush();
+        }
+    }
+
+    private static void bridgeRaw(Socket client, Socket remote) throws IOException {
+        InputStream clientIn = client.getInputStream();
+        OutputStream clientOut = client.getOutputStream();
+        InputStream remoteIn = remote.getInputStream();
+        OutputStream remoteOut = remote.getOutputStream();
+        Thread upload = new Thread(() -> {
+            byte[] buffer = new byte[BUFFER_SIZE];
+            try {
+                while (running) {
+                    int read = clientIn.read(buffer);
+                    if (read < 0) {
+                        break;
+                    }
+                    remoteOut.write(buffer, 0, read);
+                    remoteOut.flush();
+                }
+            } catch (Exception ignore) {
+            } finally {
+                closeQuietly(client);
+                closeQuietly(remote);
+            }
+        }, "WssMiniAppProxyRawUpload");
+        upload.setDaemon(true);
+        upload.start();
+
+        byte[] buffer = new byte[BUFFER_SIZE];
+        while (running) {
+            int read = remoteIn.read(buffer);
+            if (read < 0) {
+                break;
+            }
+            clientOut.write(buffer, 0, read);
             clientOut.flush();
         }
     }

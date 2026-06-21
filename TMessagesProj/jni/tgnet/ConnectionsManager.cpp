@@ -3965,6 +3965,9 @@ void ConnectionsManager::setProxySettings(std::string address, uint16_t port, st
 }
 
 static int32_t normalizeWssTransportMode(int32_t mode) {
+    if (mode == WssTransport::WSS_TRANSPORT_SOCKS5) {
+        return WssTransport::WSS_TRANSPORT_CUSTOM;
+    }
     if (mode >= WssTransport::WSS_TRANSPORT_OFF && mode <= WssTransport::WSS_TRANSPORT_SOCKS5) {
         return mode;
     }
@@ -3984,7 +3987,7 @@ void ConnectionsManager::setWssTransportSettings(int32_t mode, int32_t gatewayMo
         } else if (normalizedPath[0] != '/') {
             normalizedPath = "/" + normalizedPath;
         }
-        bool effectiveSocksEnabled = socksEnabled && normalizedMode == WssTransport::WSS_TRANSPORT_SOCKS5 && !socksHost.empty();
+        bool effectiveSocksEnabled = socksEnabled && normalizedMode != WssTransport::WSS_TRANSPORT_OFF && !socksHost.empty();
         bool wssTransportChanged = wssTransportMode != normalizedMode
                 || wssGatewayMode != normalizedGatewayMode
                 || wssHost != host

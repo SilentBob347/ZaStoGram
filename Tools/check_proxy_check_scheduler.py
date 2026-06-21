@@ -147,6 +147,18 @@ if "ProxyCheckScheduler.enqueueStale(currentAccount, proxyList" in proxy_list_te
     print("Proxy check scheduler guard failed:")
     print(f" - {PROXY_LIST.relative_to(ROOT)}: opening the proxy list must not start a full proxy-check sweep")
     sys.exit(1)
+did_update_start = proxy_list_text.find("id == NotificationCenter.didUpdateConnectionState")
+proxy_done_start = proxy_list_text.find("id == NotificationCenter.proxyCheckDone")
+did_update_end = proxy_done_start if proxy_done_start > did_update_start else len(proxy_list_text)
+proxy_done_end = proxy_list_text.find("private class ListAdapter", proxy_done_start)
+if did_update_start == -1 or proxy_done_start == -1 or "updateRows(true)" in proxy_list_text[did_update_start:did_update_end]:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: connection-state updates must not re-sort the proxy list while the user is selecting a proxy")
+    sys.exit(1)
+if proxy_done_start == -1 or proxy_done_end == -1 or "updateRows(true)" in proxy_list_text[proxy_done_start:proxy_done_end]:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: proxy-check result events must update visible rows without full list reordering")
+    sys.exit(1)
 update_status_start = proxy_list_text.find("public void updateStatus()")
 update_status_end = proxy_list_text.find("public void setSelectionEnabled", update_status_start)
 update_status_body = proxy_list_text[update_status_start:update_status_end]

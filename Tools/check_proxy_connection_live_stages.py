@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 import sys
 
 
@@ -26,6 +27,7 @@ LIVE_PHASES = [
     "socket_connect_start",
     "socket_connected",
     "client_hello_sent",
+    "admission_hold_after_client_hello_failure",
     "server_hello_hmac_ok",
     "on_connected",
     "first_tls_app_sent",
@@ -50,6 +52,8 @@ def main() -> None:
     for phase in LIVE_PHASES:
         require(phase in diagnostics, f"ProxyCheckDiagnostics must define live phase '{phase}'")
         require(phase in text("socket") or phase in text("connections_java"), f"live phase '{phase}' must be emitted or consumed")
+    for phase in sorted(set(re.findall(r'publishProxyConnectionStage\("([^"]+)"\)', text("socket")))):
+        require(phase in diagnostics, f"native published phase '{phase}' must be present in ProxyCheckDiagnostics for GUI rendering")
 
     require(
         "isLivePhase" in diagnostics
@@ -69,6 +73,30 @@ def main() -> None:
         and header_live_idx < header_checking_idx,
         "proxy window header must show fresh live stages before generic checking text",
     )
+    status_idx = diagnostics.find("public static String statusText")
+    status_live_idx = diagnostics.find("if (hasFreshLivePhase(proxyInfo))", status_idx)
+    status_failure_idx = diagnostics.find("if (hasFreshFailure(proxyInfo))", status_idx)
+    header_failure_idx = diagnostics.find("if (hasFreshFailure(proxyInfo))", header_idx)
+    require(
+        status_idx >= 0
+        and status_live_idx >= 0
+        and status_failure_idx >= 0
+        and status_live_idx < status_failure_idx
+        and header_live_idx < header_failure_idx,
+        "current proxy live stages must override stale proxy-check failures in row and header text",
+    )
+    has_failure_idx = diagnostics.find("public static boolean hasFreshFailure")
+    has_failure_body = diagnostics[has_failure_idx:diagnostics.find("public static String statusText", has_failure_idx)]
+    require(
+        "lastCheckDiagnosticTime" in has_failure_body
+        and "isFailure(proxyInfo.lastCheckDiagnostic)" in has_failure_body,
+        "fresh failure phases must use diagnostic timestamp, not only proxy-check availability timestamp",
+    )
+    require(
+        "ProxyCheckDiagnostics.isFailure(normalizedDiagnostic)" in text("connections_java")
+        and "!ProxyCheckDiagnostics.UNKNOWN_FAIL.equals(normalizedDiagnostic)" in text("connections_java"),
+        "current proxy stage callback must accept concrete failure phases while rejecting unknown_fail noise",
+    )
     require(
         "proxyConnectionStageChanged" in text("notification_center")
         and "onProxyConnectionStageChanged" in text("connections_java")
@@ -87,9 +115,14 @@ def main() -> None:
         and "!overrideProxyAddress.empty()" in text("socket")
         and 'publishProxyConnectionStage("host_resolve_start")' in text("socket")
         and 'publishProxyConnectionStage("client_hello_sent")' in text("socket")
+        and 'publishProxyConnectionStage("admission_hold_after_client_hello_failure")' in text("socket")
         and 'publishProxyConnectionStage("server_hello_hmac_ok")' in text("socket")
         and 'publishProxyConnectionStage("first_tls_app_recv")' in text("socket"),
         "ConnectionSocket must publish live stages at the same boundaries it logs",
+    )
+    require(
+        "publishProxyConnectionStage(proxyCheckDiagnostic.c_str())" in text("socket"),
+        "ConnectionSocket must publish a concrete terminal diagnostic on failed current-proxy disconnects",
     )
     require(
         "addObserver(this, NotificationCenter.proxyConnectionStageChanged)" in text("proxy_list")
@@ -109,6 +142,7 @@ def main() -> None:
             "ProxyStatusTcpConnecting",
             "ProxyStatusTcpConnected",
             "ProxyStatusClientHelloSent",
+            "ProxyStatusAdmissionHoldAfterClientHelloFailure",
             "ProxyStatusServerHelloOk",
             "ProxyStatusMtprotoStarting",
             "ProxyStatusFirstDataSent",

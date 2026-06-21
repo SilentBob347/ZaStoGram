@@ -390,6 +390,9 @@ public class SharedConfig {
     }
 
     public static int normalizeWssTransportMode(int mode) {
+        if (mode == TRANSPORT_WSS_SOCKS5) {
+            return TRANSPORT_WSS_CUSTOM;
+        }
         if (mode >= TRANSPORT_LEGACY_PROXY && mode <= TRANSPORT_WSS_SOCKS5) {
             return mode;
         }
@@ -457,11 +460,12 @@ public class SharedConfig {
 
         public String getLink() {
             if (isWssTransport()) {
+                int mode = normalizeWssTransportMode(transportMode);
                 StringBuilder url = new StringBuilder("zastogram://wss?");
                 try {
                     url.append("server=").append(URLEncoder.encode(wssHost, "UTF-8")).append("&").append("port=").append(wssPort);
                     url.append("&path=").append(URLEncoder.encode(wssPath, "UTF-8"));
-                    url.append("&mode=").append(transportMode);
+                    url.append("&mode=").append(mode);
                 } catch (UnsupportedEncodingException ignored) {}
                 return url.toString();
             }
@@ -482,11 +486,12 @@ public class SharedConfig {
         }
 
         public boolean isWssTransport() {
-            return transportMode == TRANSPORT_WSS_OFFICIAL || transportMode == TRANSPORT_WSS_CUSTOM || transportMode == TRANSPORT_WSS_SOCKS5;
+            int mode = normalizeWssTransportMode(transportMode);
+            return mode == TRANSPORT_WSS_OFFICIAL || mode == TRANSPORT_WSS_CUSTOM;
         }
 
         public boolean isSocks5OverWss() {
-            return transportMode == TRANSPORT_WSS_SOCKS5;
+            return false;
         }
     }
 
@@ -1618,7 +1623,7 @@ public class SharedConfig {
 
             serializedData.writeInt64(info.ping);
             serializedData.writeInt64(info.availableCheckTime);
-            serializedData.writeInt32(info.transportMode);
+            serializedData.writeInt32(normalizeWssTransportMode(info.transportMode));
             serializedData.writeString(info.wssHost != null ? info.wssHost : "");
             serializedData.writeInt32(info.wssPort);
             serializedData.writeString(info.wssPath != null ? info.wssPath : "/apiws");

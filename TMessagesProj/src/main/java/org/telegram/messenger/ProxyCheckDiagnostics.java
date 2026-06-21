@@ -8,6 +8,7 @@ import org.telegram.ui.ActionBar.Theme;
 public class ProxyCheckDiagnostics {
 
     private static final long LIVE_PHASE_STALE_MS = 45 * 1000L;
+    private static final long FAILURE_PHASE_STALE_MS = 2 * 60 * 1000L;
 
     public static final String OK = "ok";
     public static final String CHECKING = "checking";
@@ -17,6 +18,7 @@ public class ProxyCheckDiagnostics {
     public static final String SOCKET_CONNECT_START = "socket_connect_start";
     public static final String SOCKET_CONNECTED = "socket_connected";
     public static final String CLIENT_HELLO_SENT = "client_hello_sent";
+    public static final String ADMISSION_HOLD_AFTER_CLIENT_HELLO_FAILURE = "admission_hold_after_client_hello_failure";
     public static final String SERVER_HELLO_HMAC_OK = "server_hello_hmac_ok";
     public static final String ON_CONNECTED = "on_connected";
     public static final String FIRST_TLS_APP_SENT = "first_tls_app_sent";
@@ -46,6 +48,7 @@ public class ProxyCheckDiagnostics {
             case SOCKET_CONNECT_START:
             case SOCKET_CONNECTED:
             case CLIENT_HELLO_SENT:
+            case ADMISSION_HOLD_AFTER_CLIENT_HELLO_FAILURE:
             case SERVER_HELLO_HMAC_OK:
             case ON_CONNECTED:
             case FIRST_TLS_APP_SENT:
@@ -80,6 +83,7 @@ public class ProxyCheckDiagnostics {
             case SOCKET_CONNECT_START:
             case SOCKET_CONNECTED:
             case CLIENT_HELLO_SENT:
+            case ADMISSION_HOLD_AFTER_CLIENT_HELLO_FAILURE:
             case SERVER_HELLO_HMAC_OK:
             case ON_CONNECTED:
             case FIRST_TLS_APP_SENT:
@@ -98,7 +102,10 @@ public class ProxyCheckDiagnostics {
     }
 
     public static boolean hasFreshFailure(SharedConfig.ProxyInfo proxyInfo) {
-        return proxyInfo != null && ProxyCheckScheduler.isFresh(proxyInfo) && isFailure(proxyInfo.lastCheckDiagnostic);
+        return proxyInfo != null
+                && proxyInfo.lastCheckDiagnosticTime != 0
+                && android.os.SystemClock.elapsedRealtime() - proxyInfo.lastCheckDiagnosticTime < FAILURE_PHASE_STALE_MS
+                && isFailure(proxyInfo.lastCheckDiagnostic);
     }
 
     public static String statusText(SharedConfig.ProxyInfo proxyInfo, boolean currentProxyEnabled, int currentConnectionState) {
@@ -112,17 +119,17 @@ public class ProxyCheckDiagnostics {
                 }
                 return LocaleController.getString(R.string.Connected);
             }
-            if (hasFreshFailure(proxyInfo)) {
+            if (hasFreshLivePhase(proxyInfo)) {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
             }
-            if (hasFreshLivePhase(proxyInfo)) {
+            if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
+                return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
+            }
+            if (hasFreshFailure(proxyInfo)) {
                 return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
             }
             if (proxyInfo.checking) {
                 return LocaleController.getString(R.string.ProxyStatusCheckingConnection);
-            }
-            if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
-                return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
             }
             return LocaleController.getString(R.string.ProxyStatusConnectingSlow);
         }
@@ -154,17 +161,17 @@ public class ProxyCheckDiagnostics {
             }
             return LocaleController.getString(R.string.ProxyWindowStatusReady);
         }
-        if (hasFreshFailure(proxyInfo)) {
+        if (hasFreshLivePhase(proxyInfo)) {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
-        if (hasFreshLivePhase(proxyInfo)) {
+        if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
+            return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
+        }
+        if (hasFreshFailure(proxyInfo)) {
             return shortDiagnosticText(proxyInfo.lastCheckDiagnostic);
         }
         if (proxyInfo.checking) {
             return LocaleController.getString(R.string.ProxyWindowStatusChecking);
-        }
-        if (currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
-            return LocaleController.getString(R.string.ProxyStatusWaitingTcp);
         }
         return LocaleController.getString(R.string.ProxyStatusConnectingSlow);
     }
@@ -210,6 +217,8 @@ public class ProxyCheckDiagnostics {
                 return LocaleController.getString(R.string.ProxyStatusTcpConnected);
             case CLIENT_HELLO_SENT:
                 return LocaleController.getString(R.string.ProxyStatusClientHelloSent);
+            case ADMISSION_HOLD_AFTER_CLIENT_HELLO_FAILURE:
+                return LocaleController.getString(R.string.ProxyStatusAdmissionHoldAfterClientHelloFailure);
             case SERVER_HELLO_HMAC_OK:
                 return LocaleController.getString(R.string.ProxyStatusServerHelloOk);
             case ON_CONNECTED:
