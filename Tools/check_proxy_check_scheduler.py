@@ -91,6 +91,7 @@ checks = [
     (README, "Java backoff использует ту же фазовую идею ключей", "README must document Java scheduler phase-aware endpoint keys"),
     (README, "host:port:username:password:secret", "README must document exact-key proxy-check coalescing"),
     (README, "generic `Connected`", "README must document that generic connected-state observations do not erase fresh terminal proxy phases"),
+    (README, "Явный новый старт подключения", "README must document that explicit reconnect attempts publish a fresh starting phase"),
 ]
 
 failed = []
@@ -136,6 +137,16 @@ if (
 ):
     print("Proxy check scheduler guard failed:")
     print(f" - {SCHEDULER.relative_to(ROOT)}: generic connected-state observations must not overwrite fresh terminal proxy failures")
+    sys.exit(1)
+mark_starting_start = scheduler_text.find("public static void markConnectionStarting")
+mark_starting_end = scheduler_text.find("public static void markConnectionUsable", mark_starting_start)
+mark_starting_body = scheduler_text[mark_starting_start:mark_starting_end]
+if (
+    "proxyInfo.lastCheckDiagnostic = ProxyCheckDiagnostics.CONNECT_START;" not in mark_starting_body
+    or "proxyInfo.lastCheckDiagnosticTime = SystemClock.elapsedRealtime();" not in mark_starting_body
+):
+    print("Proxy check scheduler guard failed:")
+    print(f" - {SCHEDULER.relative_to(ROOT)}: explicit current-proxy reconnect attempts must publish connect_start with a fresh timestamp")
     sys.exit(1)
 if "finish result=\" + (effectiveTime == -1" in scheduler_text or "onProxyChecked(listener.proxyInfo, effectiveTime)" in scheduler_text:
     print("Proxy check scheduler guard failed:")
@@ -199,6 +210,23 @@ update_status_body = proxy_list_text[update_status_start:update_status_end]
 if "ProxyCheckScheduler.markConnected" in update_status_body:
     print("Proxy check scheduler guard failed:")
     print(f" - {PROXY_LIST.relative_to(ROOT)}: proxy list cell rendering must not mutate scheduler freshness state")
+    sys.exit(1)
+manual_select_start = proxy_list_text.find("SharedConfig.currentProxy = info;")
+manual_select_update = proxy_list_text.find("for (int a = proxyStartRow; a < proxyEndRow; a++)", manual_select_start)
+manual_select_mark_starting = proxy_list_text.find("ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy);", manual_select_start)
+if manual_select_start == -1 or manual_select_update == -1 or manual_select_mark_starting == -1 or manual_select_mark_starting > manual_select_update:
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: manual proxy selection must publish connect_start before repainting visible proxy rows")
+    sys.exit(1)
+reapply_start = proxy_list_text.find("private void reapplyCurrentProxySettings()")
+reapply_end = proxy_list_text.find("private void reapplyWssTransportSettings()", reapply_start)
+reapply_body = proxy_list_text[reapply_start:reapply_end]
+if (
+    "ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy);" not in reapply_body
+    or "updateCurrentProxyStatusCell();" not in reapply_body
+):
+    print("Proxy check scheduler guard failed:")
+    print(f" - {PROXY_LIST.relative_to(ROOT)}: MTProxy option reapply must immediately repaint the current row with the new connect_start phase")
     sys.exit(1)
 if "notifyOwnerFinishedIfDrained(request)" in scheduler_text:
     print("Proxy check scheduler guard failed:")

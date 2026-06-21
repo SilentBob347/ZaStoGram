@@ -555,6 +555,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 }
                 editor.commit();
                 SharedConfig.currentProxy = info;
+                ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy);
                 for (int a = proxyStartRow; a < proxyEndRow; a++) {
                     RecyclerListView.Holder holder = (RecyclerListView.Holder) listView.findViewHolderForAdapterPosition(a);
                     if (holder != null) {
@@ -569,7 +570,6 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     TextCheckCell textCheckCell = (TextCheckCell) holder.itemView;
                     textCheckCell.setChecked(true);
                 }
-                ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy);
                 ConnectionsManager.setProxySettings(useProxySettings, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret);
             } else if (position == proxyAddRow) {
                 presentFragment(isWssTransportSelected() ? ProxySettingsActivity.createWssSocksUpstream() : new ProxySettingsActivity());
@@ -715,6 +715,7 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     private void reapplyCurrentProxySettings() {
         if (useProxySettings && SharedConfig.currentProxy != null) {
             ProxyCheckScheduler.markConnectionStarting(SharedConfig.currentProxy);
+            updateCurrentProxyStatusCell();
             ConnectionsManager.setProxySettings(true, SharedConfig.currentProxy.address, SharedConfig.currentProxy.port, SharedConfig.currentProxy.username, SharedConfig.currentProxy.password, SharedConfig.currentProxy.secret);
         }
     }
