@@ -42,17 +42,6 @@ public:
     bool isProxyCloseDiagnosticSuppressed();
 
 protected:
-    enum class TransportState : uint8_t {
-        Idle,
-        Prepared,
-        WaitingGate,
-        TcpConnecting,
-        EpollRegistered,
-        FaketlsHandshake,
-        MtprotoReady,
-        Closing,
-    };
-
     int32_t instanceNum;
     void onEvent(uint32_t events);
     bool checkTimeout(int64_t now);
@@ -79,6 +68,34 @@ protected:
     int32_t overrideProxyStartupCoverMode = 0;
 
 private:
+    enum class TransportState : uint8_t {
+        Idle,
+        Prepared,
+        WaitingGate,
+        TcpConnecting,
+        EpollRegistered,
+        FaketlsHandshake,
+        MtprotoReady,
+        Closing,
+    };
+
+    enum class TransportSocketPolicy : uint8_t {
+        None,
+        NoSocket,
+        LiveEpoll,
+        OpenWithoutEpoll,
+    };
+
+    struct TransportActionRule {
+        const char *action;
+        TransportState state;
+        TransportSocketPolicy socketPolicy;
+        int16_t expectedProxyAuthState;
+        int16_t expectedTlsState;
+        bool requireWssTransport;
+        bool requireWssReady;
+    };
+
     ByteStream *outgoingByteStream = nullptr;
     struct epoll_event eventMask;
     struct sockaddr_in socketAddress;
@@ -184,9 +201,54 @@ private:
     void openConnectionInternal(bool ipv6);
     void adjustWriteOp();
     const char *transportStateName(TransportState state);
+    bool isAllowedTransportTransition(TransportState previous, TransportState next);
     void setTransportState(TransportState next, const char *reason);
+    const char *proxyAuthStateName(uint8_t state);
+    bool isAllowedProxyAuthTransition(uint8_t previous, uint8_t next);
+    void setProxyAuthState(uint8_t next, const char *reason);
+    const char *tlsStateName(int8_t state);
+    bool isAllowedTlsStateTransition(int8_t previous, int8_t next);
+    void setTlsState(int8_t next, const char *reason);
     void logTransportSnapshot(const char *event, const char *reason);
     void logTransportInvariant(const char *action, const char *reason);
+    const TransportActionRule *findTransportActionRule(const char *action);
+    bool isTransportStateAllowedForAction(const char *action);
+    bool checkTransportActionRequirements(const char *action);
+    void setSocketFd(int fd, const char *reason);
+    void setEpollRegistered(bool registered, const char *reason);
+    bool canCreateSocket(const char *action);
+    bool canUseLiveEpollSocket(const char *action);
+    bool canModifyEpollWriteInterest(const char *action);
+    bool canSendPendingClientHello();
+    bool canSendPendingTlsFrame();
+    bool canSendSocksHandshakeFrame(const char *action, uint8_t expectedProxyAuthState);
+    bool canSendPlainMtProtoPayload();
+    bool canStartTcpConnect();
+    bool canRegisterEpollSocket();
+    bool canConfigureOpenSocket();
+    bool canCheckSocketError();
+    bool canProcessEpollEvent();
+    void checkCloseSocketAction(const char *action);
+    bool canUnregisterEpollSocket();
+    bool canCloseNativeSocket();
+    void setProxyHandshakeAdmissionState(int8_t queued, int8_t published, int8_t active, int8_t ready, const char *reason);
+    void checkProxyHandshakeAdmissionRelease(bool succeeded, const char *reason);
+    void setProxyEndpointTcpConnectGateState(int8_t active, int8_t ready, int8_t published, const char *reason);
+    void setProxyEndpointBackoffReady(bool ready, const char *reason);
+    void setProxyEndpointDnsCoalesceReady(bool ready, const char *reason);
+    void setAdjustWriteOpAfterResolve(bool pending, const char *reason);
+    void setMtProxySocketConnectedLogged(bool logged, const char *reason);
+    bool canStartHostResolve();
+    void checkHostResolveCallback(const std::string &host);
+    void setWaitingForHostResolve(const std::string &host, const char *reason);
+    bool canNotifyConnected(const char *action);
+    void setSocketCloseNotified(bool notified, const char *reason);
+    void setConnectedNotified(bool sent, const char *reason);
+    bool canDeliverReceivedData(const char *action);
+    bool canSendWssFrame();
+    bool canQueueOutboundBuffer(const char *action);
+    bool canSendRawSocketBytes(const char *action);
+    bool canReceiveRawSocketBytes();
     bool isCurrentTransportWss();
     bool dispatchWssPayloads(std::vector<std::vector<uint8_t>> &payloads);
     bool scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_t timerMode);

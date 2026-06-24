@@ -258,6 +258,7 @@ class Attempt:
             "endpoint_failure": "endpoint_failure",
             "endpoint_handshake_ok": "endpoint_handshake_ok",
             "endpoint_data_path_success": "endpoint_data_path_success",
+            "endpoint_data_path_success_rejected": "endpoint_data_path_success_rejected",
             "endpoint_success": "endpoint_success",
             "transport_invariant": "transport_invariant",
             "server_hello_hmac_ok": "server_hello_hmac_ok",

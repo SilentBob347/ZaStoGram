@@ -161,7 +161,7 @@ New-Item -ItemType Directory -Force -Path $deviceLogsDir | Out-Null
 Invoke-Adb shell ls -la $remoteLogDir 2>&1 | Tee-Object -FilePath (Join-Path $sessionDir "device_logs_ls.txt") | Out-Null
 Invoke-Adb pull $remoteLogDir $deviceLogsDir 2>&1 | Tee-Object -FilePath (Join-Path $sessionDir "adb_pull_logs.txt") | Out-Null
 
-$markerPattern = "connection\(0x[0-9a-fA-F]+, account[0-9]+, dc[0-9]+, type [0-9]+\)|connecting via proxy|mtproxy_startup|mtproxy_disconnect|proxy_connection_stage|proxy_check_|proxy_check_scheduler|proxy_rotation|client_hello|client_hello_fragment|server_hello|first_tls|tls_alert|recv_eof|admission_|socket_connected|on_connected|TLS response|TLS server hello|TLS pending|ClientHello pending|socket error|EPOLLHUP|EPOLLRDHUP"
+$markerPattern = "connection\(0x[0-9a-fA-F]+, account[0-9]+, dc[0-9]+, type [0-9]+\)|connecting via proxy|mtproxy_startup|mtproxy_transport|mtproxy_disconnect|transport_state|endpoint_handshake_ok|endpoint_data_path_success|proxy_connection_stage|proxy_check_|proxy_check_scheduler|proxy_rotation|client_hello|client_hello_fragment|server_hello|first_tls|tls_alert|recv_eof|admission_|socket_connected|on_connected|TLS response|TLS server hello|TLS pending|ClientHello pending|socket error|EPOLLHUP|EPOLLRDHUP"
 $markerPath = Join-Path $sessionDir "mtproxy_markers.txt"
 $textFiles = @(Join-Path $sessionDir "logcat.txt")
 $matches = foreach ($file in $textFiles) {
@@ -231,6 +231,55 @@ if ($python -and (Test-Path $analyzerPath)) {
     }
 }
 
+$runtimeContractPath = Join-Path $sessionDir "mtproxy_runtime_contract.txt"
+$verifierPath = Join-Path $PSScriptRoot "verify_mtproxy_runtime_logs.py"
+if ($python -and (Test-Path $verifierPath)) {
+    Write-Host ""
+    Write-Host "Running MTProxy runtime contract verifier..."
+    $pythonPath = $python.Source
+    $runtimeContractLines = & $pythonPath $verifierPath $sessionDir 2>&1
+    $runtimeContractExit = $LASTEXITCODE
+    if (-not $runtimeContractLines) {
+        $runtimeContractLines = @("MTProxy runtime contract verifier produced no output.")
+    }
+    $runtimeContractLines | Set-Content -Encoding UTF8 $runtimeContractPath
+    $runtimeContractLines | Out-Host
+    if ($runtimeContractExit -ne 0) {
+        "MTProxy runtime contract verifier exited with code $runtimeContractExit." | Add-Content -Encoding UTF8 $runtimeContractPath
+        Write-Warning "MTProxy runtime contract verifier exited with code $runtimeContractExit. See $runtimeContractPath"
+    }
+} else {
+    $wslVerifier = Get-Command wsl.exe -ErrorAction SilentlyContinue
+    if ($wslVerifier -and (Test-Path $verifierPath)) {
+        Write-Host ""
+        Write-Host "Running MTProxy runtime contract verifier through WSL..."
+        $verifierUnix = Convert-ToWslPath $verifierPath
+        $sessionUnix = Convert-ToWslPath $sessionDir
+        $stdoutPath = Join-Path $sessionDir "mtproxy_runtime_contract_wsl_stdout.tmp"
+        $stderrPath = Join-Path $sessionDir "mtproxy_runtime_contract_wsl_stderr.tmp"
+        $process = Start-Process -FilePath $wslVerifier.Source -ArgumentList @("python3", $verifierUnix, $sessionUnix) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        $runtimeContractLines = @()
+        if (Test-Path $stdoutPath) {
+            $runtimeContractLines += Get-Content $stdoutPath
+        }
+        if (Test-Path $stderrPath) {
+            $runtimeContractLines += Get-Content $stderrPath
+        }
+        if (-not $runtimeContractLines) {
+            $runtimeContractLines = @("MTProxy runtime contract verifier produced no output.")
+        }
+        $runtimeContractLines | Set-Content -Encoding UTF8 $runtimeContractPath
+        $runtimeContractLines | Out-Host
+        if ($process.ExitCode -ne 0) {
+            "MTProxy runtime contract verifier exited with code $($process.ExitCode)." | Add-Content -Encoding UTF8 $runtimeContractPath
+            Write-Warning "MTProxy runtime contract verifier exited with code $($process.ExitCode). See $runtimeContractPath"
+        }
+        Remove-Item -Force -ErrorAction SilentlyContinue $stdoutPath, $stderrPath
+    } else {
+        "Python was not found; skipped MTProxy runtime contract verifier." | Set-Content -Encoding UTF8 $runtimeContractPath
+    }
+}
+
 "finished=$((Get-Date).ToString('o'))" | Add-Content -Encoding UTF8 $metaPath
 
 Write-Host ""
@@ -238,3 +287,4 @@ Write-Host "Done."
 Write-Host "Session directory: $sessionDir"
 Write-Host "Markers: $markerPath"
 Write-Host "Analysis: $analysisPath"
+Write-Host "Runtime contract: $runtimeContractPath"

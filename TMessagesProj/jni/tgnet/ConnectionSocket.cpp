@@ -1793,10 +1793,7 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_
         if (proxyHandshakeAdmissionKey.empty()) {
             proxyHandshakeAdmissionKey = currentAddress + ":" + std::to_string((unsigned int) currentPort) + ":" + currentSecretDomain;
         }
-        proxyHandshakeAdmissionQueued = false;
-        proxyHandshakeAdmissionQueuePublished = false;
-        proxyHandshakeAdmissionActive = true;
-        proxyHandshakeAdmissionReady = false;
+        setProxyHandshakeAdmissionState(0, 0, 1, 0, "admission_disabled");
         proxyHandshakeAdmissionIpv6 = ipv6;
         proxyHandshakeAdmissionStartTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
         proxyHandshakeClientHelloSentTime = 0;
@@ -1807,7 +1804,7 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_
         return false;
     }
     if (proxyHandshakeAdmissionReady) {
-        proxyHandshakeAdmissionReady = false;
+        setProxyHandshakeAdmissionState(-1, -1, -1, 0, "admission_ready_consumed");
         return false;
     }
     if (proxyHandshakeAdmissionKey.empty()) {
@@ -1837,7 +1834,7 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_
         shouldQueue = true;
         delay = mtProxyHandshakeRetryDelay(now, state.cooldownUntil, proxyHandshakeAdmissionPriority, connectionPatternMode);
         if (!proxyHandshakeAdmissionQueuePublished) {
-            proxyHandshakeAdmissionQueuePublished = true;
+            setProxyHandshakeAdmissionState(-1, 1, -1, -1, "admission_queue_publish");
             publishProxyConnectionStage("admission_queue");
             if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_queue admission_mode=%s connection_pattern=%s key=%s priority=%d active=%d limit=%d global_active=%d global_limit=%d queued=%d cooldown_ms=%ld retry=%u", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority, state.activeHandshakes, endpointActiveLimit, proxyHandshakeGlobal.activeHandshakes, globalActiveLimit, (int) state.queuedRequests.size(), (long) std::max<int64_t>(0, state.cooldownUntil - now), delay);
         } else if (LOGS_ENABLED) {
@@ -1846,9 +1843,7 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_
     } else {
         state.activeHandshakes++;
         proxyHandshakeGlobal.activeHandshakes++;
-        proxyHandshakeAdmissionActive = true;
-        proxyHandshakeAdmissionQueued = false;
-        proxyHandshakeAdmissionQueuePublished = false;
+        setProxyHandshakeAdmissionState(0, 0, 1, -1, "admission_grant");
         proxyHandshakeAdmissionStartTime = now;
         proxyHandshakeClientHelloSentTime = 0;
         delay = mtProxyHandshakeSpacingDelay(state, now, connectionPatternMode);
@@ -1869,19 +1864,19 @@ bool ConnectionSocket::scheduleProxyHandshakeAdmissionIfNeeded(bool ipv6, int32_
     pthread_mutex_unlock(&proxyHandshakeSchedulerMutex);
 
     if (shouldQueue) {
-        proxyHandshakeAdmissionQueued = true;
+        setProxyHandshakeAdmissionState(1, -1, -1, -1, "admission_queue");
         setTransportState(TransportState::WaitingGate, "admission_queue");
         scheduleProxyHandshakeAdmissionTimer(delay, timerMode, ipv6);
         return true;
     }
     if (delay == 0) {
         if (timerMode != MT_PROXY_HANDSHAKE_TIMER_ADMISSION) {
-            proxyHandshakeAdmissionReady = true;
+            setProxyHandshakeAdmissionState(-1, -1, -1, 1, "admission_zero_delay_ready");
         }
         return false;
     }
 
-    proxyHandshakeAdmissionReady = true;
+    setProxyHandshakeAdmissionState(-1, -1, -1, 1, "admission_delay");
     setTransportState(TransportState::WaitingGate, "admission_delay");
     scheduleProxyHandshakeAdmissionTimer(delay, timerMode, ipv6);
     return true;
@@ -1910,7 +1905,7 @@ void ConnectionSocket::scheduleProxyHandshakeAdmissionTimer(uint32_t delay, int3
             }
             if (mode == MT_PROXY_HANDSHAKE_TIMER_ENDPOINT_BACKOFF) {
                 bool delayedIpv6 = proxyHandshakeAdmissionIpv6;
-                proxyEndpointBackoffReady = true;
+                setProxyEndpointBackoffReady(true, "endpoint_backoff_timer_fire");
                 if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup endpoint_backoff_timer_fire generation=%u", this, proxyHandshakeAdmissionGeneration);
                 if (!waitingForHostResolve.empty()) {
                     requestPendingHostResolve();
@@ -1921,28 +1916,28 @@ void ConnectionSocket::scheduleProxyHandshakeAdmissionTimer(uint32_t delay, int3
             }
             if (mode == MT_PROXY_HANDSHAKE_TIMER_DNS_COALESCE) {
                 bool delayedIpv6 = proxyHandshakeAdmissionIpv6;
-                proxyEndpointDnsCoalesceReady = true;
+                setProxyEndpointDnsCoalesceReady(true, "dns_coalesce_timer_fire");
                 if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup dns_coalesce_timer_fire generation=%u", this, proxyHandshakeAdmissionGeneration);
                 if (!waitingForHostResolve.empty()) {
                     bool cachedIpv6 = delayedIpv6;
                     std::string host = waitingForHostResolve;
                     if (mtProxyEndpointUseCachedHostAddress(host, &cachedIpv6)) {
-                        waitingForHostResolve = "";
-                        proxyEndpointDnsCoalesceReady = false;
+                        setWaitingForHostResolve("", "dns_coalesce_cached_address");
+                        setProxyEndpointDnsCoalesceReady(false, "dns_coalesce_cached_address");
                         openConnectionInternal(cachedIpv6);
                         return;
                     }
-                    proxyEndpointDnsCoalesceReady = false;
+                    setProxyEndpointDnsCoalesceReady(false, "dns_coalesce_request_pending");
                     requestPendingHostResolve();
                     return;
                 }
-                proxyEndpointDnsCoalesceReady = false;
+                setProxyEndpointDnsCoalesceReady(false, "dns_coalesce_timer_fire");
                 openConnectionInternal(delayedIpv6);
                 return;
             }
             if (mode == MT_PROXY_HANDSHAKE_TIMER_TCP_CONNECT_GATE) {
                 bool delayedIpv6 = proxyHandshakeAdmissionIpv6;
-                proxyEndpointTcpConnectReady = true;
+                setProxyEndpointTcpConnectGateState(-1, 1, -1, "tcp_connect_gate_timer_fire");
                 if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup tcp_connect_gate_timer_fire generation=%u", this, proxyHandshakeAdmissionGeneration);
                 openConnectionInternal(delayedIpv6);
                 return;
@@ -1983,10 +1978,7 @@ void ConnectionSocket::grantProxyHandshakeAdmission(bool ipv6, uint32_t generati
     if (generation != proxyHandshakeAdmissionGeneration || socketFd < 0 || proxyAuthState < 10) {
         return;
     }
-    proxyHandshakeAdmissionQueued = false;
-    proxyHandshakeAdmissionQueuePublished = false;
-    proxyHandshakeAdmissionActive = true;
-    proxyHandshakeAdmissionReady = true;
+    setProxyHandshakeAdmissionState(0, 0, 1, 1, "admission_grant_queued");
     proxyHandshakeAdmissionStartTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     proxyHandshakeClientHelloSentTime = 0;
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_grant_queued admission_mode=%s connection_pattern=%s reason=%s key=%s priority=%d delay=%u", this, mtProxyConnectionPatternModeName(currentConnectionPatternMode), mtProxyConnectionPatternModeName(currentConnectionPatternMode), reason, proxyHandshakeAdmissionKey.c_str(), proxyHandshakeAdmissionPriority, delay);
@@ -2001,14 +1993,10 @@ void ConnectionSocket::cancelProxyHandshakeAdmission() {
     pthread_mutex_lock(&proxyHandshakeSchedulerMutex);
     mtProxyRemoveQueuedRequestLocked(this);
     pthread_mutex_unlock(&proxyHandshakeSchedulerMutex);
-    proxyHandshakeAdmissionQueued = false;
-    proxyHandshakeAdmissionQueuePublished = false;
-    proxyHandshakeAdmissionActive = false;
-    proxyHandshakeAdmissionReady = false;
-    proxyEndpointBackoffReady = false;
-    proxyEndpointTcpConnectReady = false;
-    proxyEndpointTcpConnectGatePublished = false;
-    proxyEndpointDnsCoalesceReady = false;
+    setProxyHandshakeAdmissionState(0, 0, 0, 0, "cancelProxyHandshakeAdmission");
+    setProxyEndpointBackoffReady(false, "cancelProxyHandshakeAdmission");
+    setProxyEndpointTcpConnectGateState(-1, 0, 0, "cancelProxyHandshakeAdmission");
+    setProxyEndpointDnsCoalesceReady(false, "cancelProxyHandshakeAdmission");
     proxyHandshakeAdmissionIpv6 = false;
     proxyHandshakeAdmissionTimerMode = 0;
     proxyHandshakeAdmissionTimerGeneration = proxyHandshakeAdmissionGeneration;
@@ -2022,11 +2010,9 @@ void ConnectionSocket::cancelProxyHandshakeAdmission() {
 }
 
 void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char *reason) {
+    checkProxyHandshakeAdmissionRelease(succeeded, reason);
     if (proxyHandshakeAdmissionKey.empty()) {
-        proxyHandshakeAdmissionActive = false;
-        proxyHandshakeAdmissionQueued = false;
-        proxyHandshakeAdmissionQueuePublished = false;
-        proxyHandshakeAdmissionReady = false;
+        setProxyHandshakeAdmissionState(0, 0, 0, 0, "admission_release_empty_key");
         return;
     }
 
@@ -2099,10 +2085,7 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
         publishProxyConnectionStage("admission_hold_after_client_hello_failure");
     }
 
-    proxyHandshakeAdmissionQueued = false;
-    proxyHandshakeAdmissionQueuePublished = false;
-    proxyHandshakeAdmissionActive = false;
-    proxyHandshakeAdmissionReady = false;
+    setProxyHandshakeAdmissionState(0, 0, 0, 0, "admission_release");
     proxyHandshakeAdmissionStartTime = 0;
     proxyHandshakeClientHelloSentTime = 0;
     proxyHandshakeAdmissionTimerMode = 0;
@@ -2124,7 +2107,7 @@ bool ConnectionSocket::scheduleMtProxyEndpointCircuitBreakerIfNeeded(bool ipv6) 
     }
     int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
     if (proxyEndpointBackoffReady) {
-        proxyEndpointBackoffReady = false;
+        setProxyEndpointBackoffReady(false, "endpoint_backoff_ready_consumed");
         return false;
     }
 
@@ -2169,7 +2152,7 @@ bool ConnectionSocket::scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6) 
         return false;
     }
     bool wasReady = proxyEndpointTcpConnectReady;
-    proxyEndpointTcpConnectReady = false;
+    setProxyEndpointTcpConnectGateState(-1, 0, -1, "tcp_connect_gate_consume_ready");
 
     int32_t activeTcpConnects = 0;
     bool shouldDelay = false;
@@ -2181,19 +2164,19 @@ bool ConnectionSocket::scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6) 
     } else {
         state.activeTcpConnects++;
         activeTcpConnects = state.activeTcpConnects;
-        proxyEndpointTcpConnectActive = true;
+        setProxyEndpointTcpConnectGateState(1, -1, -1, "tcp_connect_gate_grant");
     }
     pthread_mutex_unlock(&proxyHandshakeSchedulerMutex);
 
     if (!shouldDelay) {
-        proxyEndpointTcpConnectGatePublished = false;
+        setProxyEndpointTcpConnectGateState(-1, -1, 0, "tcp_connect_gate_grant");
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup tcp_connect_gate_grant key=%s active=%d ready=%d", this, currentMtProxyNetworkEndpointKey.c_str(), activeTcpConnects, wasReady ? 1 : 0);
         return false;
     }
 
     uint32_t delay = (uint32_t) ((wasReady ? MT_PROXY_ENDPOINT_TCP_CONNECT_GATE_REPEAT_MS : MT_PROXY_ENDPOINT_TCP_CONNECT_GATE_MS) + secureRandomBounded(wasReady ? 701 : 351));
     if (!proxyEndpointTcpConnectGatePublished) {
-        proxyEndpointTcpConnectGatePublished = true;
+        setProxyEndpointTcpConnectGateState(-1, -1, 1, "tcp_connect_gate");
         publishProxyConnectionStage("tcp_connect_gate");
         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup tcp_connect_gate key=%s active=%d delay=%u ready=%d", this, currentMtProxyNetworkEndpointKey.c_str(), activeTcpConnects, delay, wasReady ? 1 : 0);
     } else if (LOGS_ENABLED) {
@@ -2216,8 +2199,7 @@ void ConnectionSocket::releaseMtProxyEndpointTcpConnect(const char *reason) {
     }
     activeTcpConnects = state.activeTcpConnects;
     pthread_mutex_unlock(&proxyHandshakeSchedulerMutex);
-    proxyEndpointTcpConnectActive = false;
-    proxyEndpointTcpConnectGatePublished = false;
+    setProxyEndpointTcpConnectGateState(0, -1, 0, "tcp_connect_gate_release");
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup tcp_connect_gate_release key=%s active=%d reason=%s", this, currentMtProxyNetworkEndpointKey.c_str(), activeTcpConnects, reason != nullptr ? reason : "unknown");
 }
 
@@ -2226,7 +2208,7 @@ bool ConnectionSocket::scheduleMtProxyDnsCoalesceIfNeeded(bool ipv6) {
         return false;
     }
     if (proxyEndpointDnsCoalesceReady) {
-        proxyEndpointDnsCoalesceReady = false;
+        setProxyEndpointDnsCoalesceReady(false, "dns_coalesce_ready_consumed");
         return false;
     }
 
@@ -2331,6 +2313,15 @@ void ConnectionSocket::recordMtProxyEndpointHandshakeOk(const char *reason) {
 
 void ConnectionSocket::recordMtProxyEndpointDataPathSuccess(const char *reason) {
     if (!isCurrentMtProxyConnection() || (currentMtProxyEndpointKey.empty() && currentMtProxyNetworkEndpointKey.empty())) {
+        return;
+    }
+    if (reason == nullptr
+            || (strcmp(reason, "first_tls_app_recv") != 0
+                    && strcmp(reason, "first_mtproxy_packet_recv") != 0)) {
+        logTransportInvariant("endpoint_data_path_success", "invalid_reason");
+        if (LOGS_ENABLED) {
+            DEBUG_D("connection(%p) mtproxy_startup endpoint_data_path_success_rejected network_key=%s key=%s reason=%s", this, currentMtProxyNetworkEndpointKey.c_str(), currentMtProxyEndpointKey.c_str(), reason != nullptr ? reason : "unknown");
+        }
         return;
     }
     int64_t now = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
@@ -2506,14 +2497,167 @@ const char *ConnectionSocket::transportStateName(TransportState state) {
     }
 }
 
+bool ConnectionSocket::isAllowedTransportTransition(TransportState previous, TransportState next) {
+    if (previous == next) {
+        return true;
+    }
+    if (next == TransportState::Closing) {
+        return true;
+    }
+    struct TransportTransitionRule {
+        TransportState previous;
+        TransportState next;
+    };
+    static const TransportTransitionRule allowedTransitions[] = {
+            {TransportState::Idle, TransportState::Prepared},
+            {TransportState::Prepared, TransportState::WaitingGate},
+            {TransportState::Prepared, TransportState::TcpConnecting},
+            {TransportState::WaitingGate, TransportState::TcpConnecting},
+            {TransportState::TcpConnecting, TransportState::EpollRegistered},
+            {TransportState::EpollRegistered, TransportState::FaketlsHandshake},
+            {TransportState::EpollRegistered, TransportState::MtprotoReady},
+            {TransportState::FaketlsHandshake, TransportState::MtprotoReady},
+            {TransportState::FaketlsHandshake, TransportState::WaitingGate},
+            {TransportState::Closing, TransportState::Idle},
+    };
+    for (const TransportTransitionRule &rule : allowedTransitions) {
+        if (rule.previous == previous && rule.next == next) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ConnectionSocket::setTransportState(TransportState next, const char *reason) {
     if (currentTransportState == next) {
         return;
     }
     const char *previous = transportStateName(currentTransportState);
+    if (!isAllowedTransportTransition(currentTransportState, next)) {
+        logTransportInvariant("setTransportState", "invalid_transition");
+    }
     currentTransportState = next;
     if (LOGS_ENABLED) {
         DEBUG_D("connection(%p) mtproxy_transport state_change from=%s to=%s reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, previous, transportStateName(next), reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+const char *ConnectionSocket::proxyAuthStateName(uint8_t state) {
+    switch (state) {
+        case 0:
+            return "ready";
+        case 1:
+            return "socks_method_send";
+        case 2:
+            return "socks_method_wait";
+        case 3:
+            return "socks_auth_send";
+        case 4:
+            return "socks_auth_wait";
+        case 5:
+            return "socks_connect_send";
+        case 6:
+            return "socks_connect_wait";
+        case 10:
+            return "faketls_prepare";
+        case 11:
+            return "faketls_client_hello";
+        default:
+            return "unknown";
+    }
+}
+
+bool ConnectionSocket::isAllowedProxyAuthTransition(uint8_t previous, uint8_t next) {
+    if (previous == next) {
+        return true;
+    }
+    if (next == 0) {
+        return true;
+    }
+    struct ProxyAuthTransitionRule {
+        uint8_t previous;
+        uint8_t next;
+    };
+    static const ProxyAuthTransitionRule allowedTransitions[] = {
+            {0, 1},
+            {0, 10},
+            {1, 2},
+            {2, 3},
+            {2, 5},
+            {3, 4},
+            {4, 5},
+            {5, 6},
+            {10, 11},
+    };
+    for (const ProxyAuthTransitionRule &rule : allowedTransitions) {
+        if (rule.previous == previous && rule.next == next) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ConnectionSocket::setProxyAuthState(uint8_t next, const char *reason) {
+    if (proxyAuthState == next) {
+        return;
+    }
+    const char *previous = proxyAuthStateName(proxyAuthState);
+    if (!isAllowedProxyAuthTransition(proxyAuthState, next)) {
+        logTransportInvariant("setProxyAuthState", "invalid_transition");
+    }
+    proxyAuthState = next;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport proxy_state_change from=%s to=%s reason=%s proxy_state_from=%s proxy_state_to=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, previous, proxyAuthStateName(next), reason != nullptr ? reason : "unknown", previous, proxyAuthStateName(next), transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+const char *ConnectionSocket::tlsStateName(int8_t state) {
+    switch (state) {
+        case 0:
+            return "plain_or_inactive";
+        case 1:
+            return "faketls_ready";
+        case 2:
+            return "faketls_appdata";
+        default:
+            return "unknown";
+    }
+}
+
+bool ConnectionSocket::isAllowedTlsStateTransition(int8_t previous, int8_t next) {
+    if (previous == next) {
+        return true;
+    }
+    if (next == 0) {
+        return true;
+    }
+    struct TlsStateTransitionRule {
+        int8_t previous;
+        int8_t next;
+    };
+    static const TlsStateTransitionRule allowedTransitions[] = {
+            {0, 1},
+            {1, 2},
+    };
+    for (const TlsStateTransitionRule &rule : allowedTransitions) {
+        if (rule.previous == previous && rule.next == next) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ConnectionSocket::setTlsState(int8_t next, const char *reason) {
+    if (tlsState == next) {
+        return;
+    }
+    const char *previous = tlsStateName(tlsState);
+    if (!isAllowedTlsStateTransition(tlsState, next)) {
+        logTransportInvariant("setTlsState", "invalid_transition");
+    }
+    tlsState = next;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport tls_state_change from=%s to=%s reason=%s tls_state_from=%s tls_state_to=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, previous, tlsStateName(next), reason != nullptr ? reason : "unknown", previous, tlsStateName(next), transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
     }
 }
 
@@ -2527,6 +2671,411 @@ void ConnectionSocket::logTransportInvariant(const char *action, const char *rea
     if (LOGS_ENABLED) {
         DEBUG_D("connection(%p) mtproxy_transport transport_invariant action=%s reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, action != nullptr ? action : "unknown", reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
     }
+}
+
+const ConnectionSocket::TransportActionRule *ConnectionSocket::findTransportActionRule(const char *action) {
+    if (action == nullptr) {
+        return nullptr;
+    }
+    static const TransportActionRule allowedActionStates[] = {
+            {"create_wss_socket", TransportState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
+            {"create_wss_ipv6_socket", TransportState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
+            {"create_proxy_socket", TransportState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
+            {"create_direct_socket", TransportState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
+            {"sendPendingClientHello", TransportState::FaketlsHandshake, TransportSocketPolicy::LiveEpoll, 11, -1, false, false},
+            {"sendPendingTlsFrame", TransportState::MtprotoReady, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"raw_client_hello_send", TransportState::FaketlsHandshake, TransportSocketPolicy::LiveEpoll, 11, -1, false, false},
+            {"raw_tls_frame_send", TransportState::MtprotoReady, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"socks_method_select", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, 1, -1, false, false},
+            {"socks_auth", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, 3, -1, false, false},
+            {"socks_connect", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, 5, -1, false, false},
+            {"raw_socks_method_send", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, 1, -1, false, false},
+            {"raw_socks_auth_send", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, 3, -1, false, false},
+            {"raw_socks_connect_send", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, 5, -1, false, false},
+            {"sendPlainMtProtoPayload", TransportState::MtprotoReady, TransportSocketPolicy::LiveEpoll, 0, 0, false, false},
+            {"raw_plain_mtproto_send", TransportState::MtprotoReady, TransportSocketPolicy::LiveEpoll, 0, 0, false, false},
+            {"raw_socket_recv", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"raw_socket_recv", TransportState::FaketlsHandshake, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"raw_socket_recv", TransportState::MtprotoReady, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"checkSocketError", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"checkSocketError", TransportState::FaketlsHandshake, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"checkSocketError", TransportState::MtprotoReady, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"onEvent", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"onEvent", TransportState::FaketlsHandshake, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"onEvent", TransportState::MtprotoReady, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"adjustWriteOp", TransportState::EpollRegistered, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"adjustWriteOp", TransportState::FaketlsHandshake, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"adjustWriteOp", TransportState::MtprotoReady, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"closeSocket", TransportState::Prepared, TransportSocketPolicy::None, -1, -1, false, false},
+            {"closeSocket", TransportState::WaitingGate, TransportSocketPolicy::None, -1, -1, false, false},
+            {"closeSocket", TransportState::TcpConnecting, TransportSocketPolicy::None, -1, -1, false, false},
+            {"closeSocket", TransportState::EpollRegistered, TransportSocketPolicy::None, -1, -1, false, false},
+            {"closeSocket", TransportState::FaketlsHandshake, TransportSocketPolicy::None, -1, -1, false, false},
+            {"closeSocket", TransportState::MtprotoReady, TransportSocketPolicy::None, -1, -1, false, false},
+            {"closeSocket", TransportState::Closing, TransportSocketPolicy::None, -1, -1, false, false},
+            {"closeSocket_cleanup", TransportState::Closing, TransportSocketPolicy::None, -1, -1, false, false},
+            {"epoll_ctl_del", TransportState::Closing, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},
+            {"close_native_socket", TransportState::Closing, TransportSocketPolicy::OpenWithoutEpoll, -1, -1, false, false},
+            {"configure_socket", TransportState::Prepared, TransportSocketPolicy::OpenWithoutEpoll, -1, -1, false, false},
+            {"connect", TransportState::TcpConnecting, TransportSocketPolicy::OpenWithoutEpoll, -1, -1, false, false},
+            {"epoll_ctl_add", TransportState::TcpConnecting, TransportSocketPolicy::OpenWithoutEpoll, -1, -1, false, false},
+            {"releaseProxyHandshakeAdmission", TransportState::WaitingGate, TransportSocketPolicy::None, -1, -1, false, false},
+            {"releaseProxyHandshakeAdmission", TransportState::TcpConnecting, TransportSocketPolicy::None, -1, -1, false, false},
+            {"releaseProxyHandshakeAdmission", TransportState::EpollRegistered, TransportSocketPolicy::None, -1, -1, false, false},
+            {"releaseProxyHandshakeAdmission", TransportState::FaketlsHandshake, TransportSocketPolicy::None, -1, -1, false, false},
+            {"releaseProxyHandshakeAdmission", TransportState::MtprotoReady, TransportSocketPolicy::None, -1, -1, false, false},
+            {"releaseProxyHandshakeAdmission", TransportState::Closing, TransportSocketPolicy::None, -1, -1, false, false},
+            {"host_resolve_start", TransportState::Prepared, TransportSocketPolicy::None, -1, -1, false, false},
+            {"host_resolve_start", TransportState::WaitingGate, TransportSocketPolicy::None, -1, -1, false, false},
+            {"host_resolve_callback", TransportState::WaitingGate, TransportSocketPolicy::None, -1, -1, false, false},
+            {"wss_ready", TransportState::MtprotoReady, TransportSocketPolicy::None, -1, -1, true, true},
+            {"on_connected", TransportState::MtprotoReady, TransportSocketPolicy::None, -1, -1, false, false},
+            {"first_tls_app_recv", TransportState::MtprotoReady, TransportSocketPolicy::None, -1, -1, false, false},
+            {"first_mtproxy_packet_recv", TransportState::MtprotoReady, TransportSocketPolicy::None, -1, -1, false, false},
+            {"wss_payload_recv", TransportState::MtprotoReady, TransportSocketPolicy::None, -1, -1, true, true},
+            {"sendWssFrame", TransportState::MtprotoReady, TransportSocketPolicy::LiveEpoll, -1, -1, true, true},
+            {"writeBufferRaw", TransportState::Prepared, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBufferRaw", TransportState::WaitingGate, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBufferRaw", TransportState::TcpConnecting, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBufferRaw", TransportState::EpollRegistered, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBufferRaw", TransportState::FaketlsHandshake, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBufferRaw", TransportState::MtprotoReady, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBuffer", TransportState::Prepared, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBuffer", TransportState::WaitingGate, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBuffer", TransportState::TcpConnecting, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBuffer", TransportState::EpollRegistered, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBuffer", TransportState::FaketlsHandshake, TransportSocketPolicy::None, -1, -1, false, false},
+            {"writeBuffer", TransportState::MtprotoReady, TransportSocketPolicy::None, -1, -1, false, false},
+    };
+    for (const TransportActionRule &rule : allowedActionStates) {
+        if (strcmp(action, rule.action) == 0 && currentTransportState == rule.state) {
+            return &rule;
+        }
+    }
+    return nullptr;
+}
+
+bool ConnectionSocket::isTransportStateAllowedForAction(const char *action) {
+    return findTransportActionRule(action) != nullptr;
+}
+
+bool ConnectionSocket::checkTransportActionRequirements(const char *action) {
+    const TransportActionRule *rule = findTransportActionRule(action);
+    if (rule == nullptr) {
+        logTransportInvariant(action, "invalid_state");
+        return false;
+    }
+    if (rule->socketPolicy == TransportSocketPolicy::LiveEpoll && !canUseLiveEpollSocket(action)) {
+        return false;
+    }
+    if (rule->socketPolicy == TransportSocketPolicy::NoSocket) {
+        if (socketFd >= 0) {
+            logTransportInvariant(action, "socket_already_open");
+            return false;
+        }
+        if (epollRegistered) {
+            logTransportInvariant(action, "epoll_already_registered");
+            return false;
+        }
+    }
+    if (rule->socketPolicy == TransportSocketPolicy::OpenWithoutEpoll) {
+        if (socketFd < 0) {
+            logTransportInvariant(action, "socket_closed");
+            return false;
+        }
+        if (epollRegistered) {
+            logTransportInvariant(action, "epoll_already_registered");
+            return false;
+        }
+    }
+    if (rule->expectedProxyAuthState >= 0 && proxyAuthState != (uint8_t) rule->expectedProxyAuthState) {
+        logTransportInvariant(action, "invalid_proxy_state");
+        return false;
+    }
+    if (rule->expectedTlsState >= 0 && tlsState != rule->expectedTlsState) {
+        logTransportInvariant(action, "invalid_tls_state");
+        return false;
+    }
+    if (rule->requireWssTransport) {
+        if (!currentTransportWss) {
+            logTransportInvariant(action, "not_wss");
+            return false;
+        }
+        if (currentWssTransport == nullptr) {
+            logTransportInvariant(action, "missing_transport");
+            return false;
+        }
+    }
+    if (rule->requireWssReady && (currentWssTransport == nullptr || !currentWssTransport->isReady())) {
+        logTransportInvariant(action, "wss_not_ready");
+        return false;
+    }
+    return true;
+}
+
+void ConnectionSocket::setSocketFd(int fd, const char *reason) {
+    if (socketFd == fd) {
+        return;
+    }
+    int previousOpen = socketFd >= 0 ? 1 : 0;
+    socketFd = fd;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport socket_fd_state_change open=%d previous_open=%d reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, socketFd >= 0 ? 1 : 0, previousOpen, reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+void ConnectionSocket::setEpollRegistered(bool registered, const char *reason) {
+    if (epollRegistered == registered) {
+        return;
+    }
+    epollRegistered = registered;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport epoll_registration_state_change registered=%d reason=%s epoll_registered=%d transport_state=%s admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, registered ? 1 : 0, reason != nullptr ? reason : "unknown", epollRegistered ? 1 : 0, transportStateName(currentTransportState), proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+bool ConnectionSocket::canCreateSocket(const char *action) {
+    return checkTransportActionRequirements(action);
+}
+
+bool ConnectionSocket::canUseLiveEpollSocket(const char *action) {
+    if (socketFd < 0) {
+        logTransportInvariant(action, "socket_closed");
+        return false;
+    }
+    if (!epollRegistered) {
+        logTransportInvariant(action, "epoll_not_registered");
+        return false;
+    }
+    return true;
+}
+
+bool ConnectionSocket::canModifyEpollWriteInterest(const char *action) {
+    return checkTransportActionRequirements(action);
+}
+
+bool ConnectionSocket::canSendPendingClientHello() {
+    return checkTransportActionRequirements("sendPendingClientHello");
+}
+
+bool ConnectionSocket::canSendPendingTlsFrame() {
+    return checkTransportActionRequirements("sendPendingTlsFrame");
+}
+
+bool ConnectionSocket::canSendSocksHandshakeFrame(const char *action, uint8_t expectedProxyAuthState) {
+    const TransportActionRule *rule = findTransportActionRule(action);
+    if (rule != nullptr && rule->expectedProxyAuthState >= 0 && rule->expectedProxyAuthState != expectedProxyAuthState) {
+        logTransportInvariant(action, "proxy_state_policy_mismatch");
+        return false;
+    }
+    return checkTransportActionRequirements(action);
+}
+
+bool ConnectionSocket::canSendPlainMtProtoPayload() {
+    return checkTransportActionRequirements("sendPlainMtProtoPayload");
+}
+
+bool ConnectionSocket::canStartTcpConnect() {
+    return checkTransportActionRequirements("connect");
+}
+
+bool ConnectionSocket::canRegisterEpollSocket() {
+    return checkTransportActionRequirements("epoll_ctl_add");
+}
+
+bool ConnectionSocket::canConfigureOpenSocket() {
+    return checkTransportActionRequirements("configure_socket");
+}
+
+bool ConnectionSocket::canCheckSocketError() {
+    return checkTransportActionRequirements("checkSocketError");
+}
+
+bool ConnectionSocket::canProcessEpollEvent() {
+    return checkTransportActionRequirements("onEvent");
+}
+
+void ConnectionSocket::checkCloseSocketAction(const char *action) {
+    checkTransportActionRequirements(action);
+}
+
+bool ConnectionSocket::canUnregisterEpollSocket() {
+    return checkTransportActionRequirements("epoll_ctl_del");
+}
+
+bool ConnectionSocket::canCloseNativeSocket() {
+    return checkTransportActionRequirements("close_native_socket");
+}
+
+void ConnectionSocket::setProxyHandshakeAdmissionState(int8_t queued, int8_t published, int8_t active, int8_t ready, const char *reason) {
+    bool nextQueued = queued >= 0 ? queued != 0 : proxyHandshakeAdmissionQueued;
+    bool nextPublished = published >= 0 ? published != 0 : proxyHandshakeAdmissionQueuePublished;
+    bool nextActive = active >= 0 ? active != 0 : proxyHandshakeAdmissionActive;
+    bool nextReady = ready >= 0 ? ready != 0 : proxyHandshakeAdmissionReady;
+    if (proxyHandshakeAdmissionQueued == nextQueued
+            && proxyHandshakeAdmissionQueuePublished == nextPublished
+            && proxyHandshakeAdmissionActive == nextActive
+            && proxyHandshakeAdmissionReady == nextReady) {
+        return;
+    }
+    proxyHandshakeAdmissionQueued = nextQueued;
+    proxyHandshakeAdmissionQueuePublished = nextPublished;
+    proxyHandshakeAdmissionActive = nextActive;
+    proxyHandshakeAdmissionReady = nextReady;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport admission_state_change queued=%d published=%d active=%d ready=%d reason=%s admission_active=%d admission_queued=%d transport_state=%s epoll_registered=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, proxyHandshakeAdmissionQueued ? 1 : 0, proxyHandshakeAdmissionQueuePublished ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionReady ? 1 : 0, reason != nullptr ? reason : "unknown", proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+void ConnectionSocket::checkProxyHandshakeAdmissionRelease(bool succeeded, const char *reason) {
+    if (!proxyHandshakeAdmissionActive && !proxyHandshakeAdmissionQueued) {
+        return;
+    }
+    if (checkTransportActionRequirements("releaseProxyHandshakeAdmission")) {
+        return;
+    }
+    logTransportInvariant("releaseProxyHandshakeAdmission", succeeded ? "unexpected_success_state" : "unexpected_failure_state");
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport admission_release_invariant reason=%s success=%d transport_state=%s admission_active=%d admission_queued=%d", this, reason != nullptr ? reason : "unknown", succeeded ? 1 : 0, transportStateName(currentTransportState), proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0);
+    }
+}
+
+void ConnectionSocket::setProxyEndpointTcpConnectGateState(int8_t active, int8_t ready, int8_t published, const char *reason) {
+    bool nextActive = active >= 0 ? active != 0 : proxyEndpointTcpConnectActive;
+    bool nextReady = ready >= 0 ? ready != 0 : proxyEndpointTcpConnectReady;
+    bool nextPublished = published >= 0 ? published != 0 : proxyEndpointTcpConnectGatePublished;
+    if (proxyEndpointTcpConnectActive == nextActive
+            && proxyEndpointTcpConnectReady == nextReady
+            && proxyEndpointTcpConnectGatePublished == nextPublished) {
+        return;
+    }
+    proxyEndpointTcpConnectActive = nextActive;
+    proxyEndpointTcpConnectReady = nextReady;
+    proxyEndpointTcpConnectGatePublished = nextPublished;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport tcp_connect_gate_state_change active=%d ready=%d published=%d reason=%s tcp_gate_active=%d transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, proxyEndpointTcpConnectActive ? 1 : 0, proxyEndpointTcpConnectReady ? 1 : 0, proxyEndpointTcpConnectGatePublished ? 1 : 0, reason != nullptr ? reason : "unknown", proxyEndpointTcpConnectActive ? 1 : 0, transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+void ConnectionSocket::setProxyEndpointBackoffReady(bool ready, const char *reason) {
+    if (proxyEndpointBackoffReady == ready) {
+        return;
+    }
+    proxyEndpointBackoffReady = ready;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport endpoint_backoff_ready_state_change ready=%d reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, proxyEndpointBackoffReady ? 1 : 0, reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+void ConnectionSocket::setProxyEndpointDnsCoalesceReady(bool ready, const char *reason) {
+    if (proxyEndpointDnsCoalesceReady == ready) {
+        return;
+    }
+    proxyEndpointDnsCoalesceReady = ready;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport dns_coalesce_ready_state_change ready=%d reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, proxyEndpointDnsCoalesceReady ? 1 : 0, reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+void ConnectionSocket::setAdjustWriteOpAfterResolve(bool pending, const char *reason) {
+    if (adjustWriteOpAfterResolve == pending) {
+        return;
+    }
+    adjustWriteOpAfterResolve = pending;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport write_after_resolve_state_change pending=%d reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, adjustWriteOpAfterResolve ? 1 : 0, reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+void ConnectionSocket::setMtProxySocketConnectedLogged(bool logged, const char *reason) {
+    if (mtproxySocketConnectedLogged == logged) {
+        return;
+    }
+    mtproxySocketConnectedLogged = logged;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport socket_connected_logged_state_change logged=%d reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, mtproxySocketConnectedLogged ? 1 : 0, reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+bool ConnectionSocket::canStartHostResolve() {
+    if (waitingForHostResolve.empty()) {
+        logTransportInvariant("host_resolve_start", "no_pending_host");
+        return false;
+    }
+    return checkTransportActionRequirements("host_resolve_start");
+}
+
+void ConnectionSocket::checkHostResolveCallback(const std::string &host) {
+    if (waitingForHostResolve != host) {
+        return;
+    }
+    if (!checkTransportActionRequirements("host_resolve_callback")) {
+        logTransportInvariant("host_resolve_callback", "invalid_state");
+        if (LOGS_ENABLED) {
+            DEBUG_D("connection(%p) mtproxy_transport host_resolve_callback_invariant host=%s transport_state=%s admission_active=%d admission_queued=%d waiting_resolve=%d", this, host.c_str(), transportStateName(currentTransportState), proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1);
+        }
+    }
+}
+
+void ConnectionSocket::setWaitingForHostResolve(const std::string &host, const char *reason) {
+    if (waitingForHostResolve == host) {
+        return;
+    }
+    waitingForHostResolve = host;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport host_resolve_state_change waiting=%d reason=%s waiting_resolve=%d host_len=%zu transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d proxy_state=%d tls_state=%d", this, waitingForHostResolve.empty() ? 0 : 1, reason != nullptr ? reason : "unknown", waitingForHostResolve.empty() ? 0 : 1, waitingForHostResolve.size(), transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+bool ConnectionSocket::canNotifyConnected(const char *action) {
+    if (!checkTransportActionRequirements(action)) {
+        return false;
+    }
+    if (onConnectedSent) {
+        logTransportInvariant(action, "already_notified");
+        return false;
+    }
+    return true;
+}
+
+void ConnectionSocket::setSocketCloseNotified(bool notified, const char *reason) {
+    if (socketCloseNotified == notified) {
+        return;
+    }
+    socketCloseNotified = notified;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport socket_close_notify_state_change notified=%d reason=%s close_notified=%d transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, notified ? 1 : 0, reason != nullptr ? reason : "unknown", socketCloseNotified ? 1 : 0, transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+void ConnectionSocket::setConnectedNotified(bool sent, const char *reason) {
+    if (onConnectedSent == sent) {
+        return;
+    }
+    onConnectedSent = sent;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport connected_notify_state_change sent=%d reason=%s connected_notified=%d transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, sent ? 1 : 0, reason != nullptr ? reason : "unknown", onConnectedSent ? 1 : 0, transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+bool ConnectionSocket::canDeliverReceivedData(const char *action) {
+    return checkTransportActionRequirements(action);
+}
+
+bool ConnectionSocket::canSendWssFrame() {
+    return checkTransportActionRequirements("sendWssFrame");
+}
+
+bool ConnectionSocket::canQueueOutboundBuffer(const char *action) {
+    return checkTransportActionRequirements(action);
+}
+
+bool ConnectionSocket::canSendRawSocketBytes(const char *action) {
+    return checkTransportActionRequirements(action);
+}
+
+bool ConnectionSocket::canReceiveRawSocketBytes() {
+    return checkTransportActionRequirements("raw_socket_recv");
 }
 
 void ConnectionSocket::clearPendingClientHello() {
@@ -2563,6 +3112,9 @@ bool ConnectionSocket::buildPendingClientHello(uint32_t size) {
 }
 
 bool ConnectionSocket::sendPendingClientHelloFragment(uint32_t limit) {
+    if (!canSendRawSocketBytes("raw_client_hello_send")) {
+        return false;
+    }
     while (pendingClientHello != nullptr && pendingClientHelloOffset < limit) {
         ssize_t sentLength = send(socketFd, pendingClientHello->bytes + pendingClientHelloOffset, limit - pendingClientHelloOffset, 0);
         if (sentLength < 0) {
@@ -2592,8 +3144,7 @@ bool ConnectionSocket::sendPendingClientHelloFragment(uint32_t limit) {
 }
 
 bool ConnectionSocket::sendPendingClientHello() {
-    if (currentTransportState != TransportState::FaketlsHandshake || proxyAuthState != 11) {
-        logTransportInvariant("sendPendingClientHello", "invalid_state");
+    if (!canSendPendingClientHello()) {
         return false;
     }
     while (pendingClientHello != nullptr && pendingClientHelloOffset < pendingClientHelloSize) {
@@ -2749,7 +3300,7 @@ bool ConnectionSocket::buildPendingTlsFrame(NativeByteBuffer *buffer, uint32_t r
         static std::string header1 = std::string("\x14\x03\x03\x00\x01\x01", 6);
         std::memcpy(tempBuffer->bytes, header1.data(), header1.size());
         headersSize += header1.size();
-        tlsState = 2;
+        setTlsState(2, "first_tls_frame_header");
     }
     static std::string header2 = std::string("\x17\x03\x03", 3);
     std::memcpy(tempBuffer->bytes + headersSize, header2.data(), header2.size());
@@ -2770,8 +3321,10 @@ bool ConnectionSocket::buildPendingTlsFrame(NativeByteBuffer *buffer, uint32_t r
 }
 
 bool ConnectionSocket::sendPendingTlsFrame() {
-    if (currentTransportState != TransportState::MtprotoReady) {
-        logTransportInvariant("sendPendingTlsFrame", "invalid_state");
+    if (!canSendPendingTlsFrame()) {
+        return false;
+    }
+    if (!canSendRawSocketBytes("raw_tls_frame_send")) {
         return false;
     }
     while (pendingTlsFrame != nullptr && pendingTlsFrameOffset < pendingTlsFrameSize) {
@@ -2838,16 +3391,16 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     clearPendingTlsFrame();
     currentNetworkType = networkType;
     isIpv6 = ipv6;
-    socketCloseNotified = false;
+    setSocketCloseNotified(false, "openConnection");
     proxyCloseDiagnosticSuppressed = false;
-    epollRegistered = false;
+    setEpollRegistered(false, "openConnection");
     setTransportState(TransportState::Prepared, "openConnection");
     currentAddress = address;
     currentPort = port;
     currentSocksUsername.clear();
     currentSocksPassword.clear();
-    waitingForHostResolve = "";
-    adjustWriteOpAfterResolve = false;
+    setWaitingForHostResolve("", "openConnection");
+    setAdjustWriteOpAfterResolve(false, "openConnection");
     currentSecret = "";
     currentSecretDomain = "";
     currentSecretKind = "none";
@@ -2875,14 +3428,12 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     currentMtProxyDnsCacheKey = "";
     proxyCheckDiagnostic = "tcp_not_connected";
     proxyHandshakeAdmissionKey = "";
-    proxyHandshakeAdmissionQueuePublished = false;
-    proxyEndpointBackoffReady = false;
-    proxyEndpointTcpConnectActive = false;
-    proxyEndpointTcpConnectReady = false;
-    proxyEndpointTcpConnectGatePublished = false;
-    proxyEndpointDnsCoalesceReady = false;
-    tlsState = 0;
-    mtproxySocketConnectedLogged = false;
+    setProxyHandshakeAdmissionState(-1, 0, -1, -1, "openConnection");
+    setProxyEndpointBackoffReady(false, "openConnection");
+    setProxyEndpointTcpConnectGateState(0, 0, 0, "openConnection");
+    setProxyEndpointDnsCoalesceReady(false, "openConnection");
+    setTlsState(0, "openConnection");
+    setMtProxySocketConnectedLogged(false, "openConnection");
     mtproxyFirstTlsFrameSentLogged = false;
     mtproxyFirstTlsDataReceivedLogged = false;
     mtproxyFirstPlainDataSentLogged = false;
@@ -2972,7 +3523,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     if (shouldUseWss) {
         currentTransportWss = true;
         currentSecretKind = "wss";
-        proxyAuthState = 0;
+        setProxyAuthState(0, "wss_setup");
         currentWssRoute = selectedWssRoute;
         std::string wssConnectHost = currentWssRoute.relayIp;
         uint16_t wssConnectPort = currentWssRoute.relayPort;
@@ -2981,7 +3532,13 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             wssConnectPort = currentWssRoute.upstreamSocksPort == 0 ? 1080 : currentWssRoute.upstreamSocksPort;
             if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup connect_via_socks socks=%s:%u relay=%s:%u domain=%s", this, wssConnectHost.c_str(), (uint32_t) wssConnectPort, currentWssRoute.relayIp.c_str(), (uint32_t) currentWssRoute.relayPort, currentWssRoute.domain.c_str());
         }
-        if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        if (!canCreateSocket("create_wss_socket")) {
+            closeSocket(1, -1);
+            return;
+        }
+        int createdFd = socket(AF_INET, SOCK_STREAM, 0);
+        setSocketFd(createdFd, "create_wss_socket");
+        if (socketFd < 0) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) can't create WSS socket", this);
             closeSocket(1, -1);
             return;
@@ -2995,7 +3552,13 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         if (continueCheckAddress) {
             if (inet_pton(AF_INET6, wssConnectHost.c_str(), &socketAddress6.sin6_addr.s6_addr) == 1) {
                 if (close(socketFd) == 0) {
-                    socketFd = socket(AF_INET6, SOCK_STREAM, 0);
+                    setSocketFd(-1, "create_wss_ipv6_reopen");
+                    if (!canCreateSocket("create_wss_ipv6_socket")) {
+                        closeSocket(1, -1);
+                        return;
+                    }
+                    int createdIpv6Fd = socket(AF_INET6, SOCK_STREAM, 0);
+                    setSocketFd(createdIpv6Fd, "create_wss_ipv6_socket");
                 }
                 if (socketFd < 0) {
                     closeSocket(1, -1);
@@ -3009,7 +3572,12 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         }
         if (continueCheckAddress) {
 #ifdef USE_DELEGATE_HOST_RESOLVE
-            waitingForHostResolve = wssConnectHost;
+            setWaitingForHostResolve(wssConnectHost, "wss_host_resolve_start");
+            if (!canStartHostResolve()) {
+                closeSocket(1, -1);
+                return;
+            }
+            setTransportState(TransportState::WaitingGate, "host_resolve_start");
             ConnectionsManager::getInstance(instanceNum).delegate->getHostByName(wssConnectHost, instanceNum, this);
             return;
 #else
@@ -3034,14 +3602,20 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     } else if (!proxyAddress->empty()) {
         currentSecretKind = proxySecret->empty() ? "socks" : mtProxySecretKindName(*proxySecret);
         if (LOGS_ENABLED) DEBUG_D("connection(%p) connecting via proxy %s:%d secret[%d] secret_kind=%s", this, proxyAddress->c_str(), proxyPort, (int) proxySecret->size(), currentSecretKind);
-        if ((socketFd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        if (!canCreateSocket("create_proxy_socket")) {
+            closeSocket(1, -1);
+            return;
+        }
+        int createdFd = socket(AF_INET, SOCK_STREAM, 0);
+        setSocketFd(createdFd, "create_proxy_socket");
+        if (socketFd < 0) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) can't create proxy socket", this);
             closeSocket(1, -1);
             return;
         }
         uint32_t tempBuffLength;
         if (proxySecret->empty()) {
-            proxyAuthState = 1;
+            setProxyAuthState(1, "socks_proxy_setup");
             tempBuffLength = 1024;
             if (!wssFallbackProxyAddress.empty()) {
                 currentAddress = address;
@@ -3058,7 +3632,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
                 currentSocksPassword = ConnectionsManager::getInstance(instanceNum).proxyPassword;
             }
         } else if (proxySecret->size() > 17 && (*proxySecret)[0] == '\xee') {
-            proxyAuthState = 10;
+            setProxyAuthState(10, "faketls_proxy_setup");
             currentSecret = proxySecret->substr(1, 16);
             currentSecretDomain = proxySecret->substr(17);
             currentSecretIsFakeTls = true;
@@ -3077,7 +3651,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             proxyHandshakeAdmissionKey = *proxyAddress + ":" + std::to_string((unsigned int) proxyPort) + ":" + currentSecretDomain;
             tempBuffLength = 65 * 1024;
         } else {
-            proxyAuthState = 0;
+            setProxyAuthState(0, "plain_proxy_setup");
             currentMtProxyDnsCacheKey = mtProxyDnsCacheKeyFor(*proxyAddress, proxyPort);
             currentMtProxyNetworkEndpointKey = mtProxyNetworkEndpointKeyFor(*proxyAddress, proxyPort);
             currentMtProxyEndpointKey = mtProxyEndpointKeyFor(*proxyAddress, proxyPort, currentSecretKind, "");
@@ -3127,7 +3701,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             }
             if (continueCheckAddress) {
 #ifdef USE_DELEGATE_HOST_RESOLVE
-                waitingForHostResolve = *proxyAddress;
+                setWaitingForHostResolve(*proxyAddress, "host_resolve_start");
                 if (isCurrentMtProxyConnection() && scheduleMtProxyEndpointCircuitBreakerIfNeeded(ipv6)) {
                     return;
                 }
@@ -3166,8 +3740,14 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             }
         }
     } else {
-        proxyAuthState = 0;
-        if ((socketFd = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0)) < 0) {
+        setProxyAuthState(0, "direct_setup");
+        if (!canCreateSocket("create_direct_socket")) {
+            closeSocket(1, -1);
+            return;
+        }
+        int createdFd = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
+        setSocketFd(createdFd, "create_direct_socket");
+        if (socketFd < 0) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) can't create socket", this);
             closeSocket(1, -1);
             return;
@@ -3192,7 +3772,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
         uint32_t tempBuffLength;
         currentSecretKind = mtProxySecretKindName(secret);
         if (secret.size() > 17 && secret[0] == '\xee') {
-            proxyAuthState = 10;
+            setProxyAuthState(10, "faketls_direct_setup");
             currentSecret = secret.substr(1, 16);
             currentSecretDomain = secret.substr(17);
             currentSecretIsFakeTls = true;
@@ -3210,7 +3790,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
             proxyHandshakeAdmissionKey = address + ":" + std::to_string((unsigned int) port) + ":" + currentSecretDomain;
             tempBuffLength = 65 * 1024;
         } else {
-            proxyAuthState = 0;
+            setProxyAuthState(0, "plain_direct_setup");
             if (!secret.empty()) {
                 currentMtProxyNetworkEndpointKey = mtProxyNetworkEndpointKeyFor(address, port);
                 currentMtProxyEndpointKey = mtProxyEndpointKeyFor(address, port, currentSecretKind, "");
@@ -3256,6 +3836,10 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
         }
     }
     int epolFd = ConnectionsManager::getInstance(instanceNum).epolFd;
+    if (!canConfigureOpenSocket()) {
+        closeSocket(1, -1);
+        return;
+    }
     int yes = 1;
     if (setsockopt(socketFd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(int))) {
         if (LOGS_ENABLED) DEBUG_E("connection(%p) set TCP_NODELAY failed", this);
@@ -3279,16 +3863,24 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
     publishProxyConnectionStage("socket_connect_start");
     setTransportState(TransportState::TcpConnecting, "socket_connect_start");
     if (LOGS_ENABLED) DEBUG_D("connection(%p) %s socket_connect_start ipv6=%d state=%d", this, currentTransportWss ? "wss_startup" : "mtproxy_startup", ipv6 ? 1 : 0, (int) proxyAuthState);
+    if (!canStartTcpConnect()) {
+        closeSocket(1, -1);
+        return;
+    }
     if (connect(socketFd, (ipv6 ? (sockaddr *) &socketAddress6 : (sockaddr *) &socketAddress), (socklen_t) (ipv6 ? sizeof(sockaddr_in6) : sizeof(sockaddr_in))) == -1 && errno != EINPROGRESS) {
         closeSocket(1, -1);
     } else {
         eventMask.events = EPOLLOUT | EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
         eventMask.data.ptr = eventObject;
+        if (!canRegisterEpollSocket()) {
+            closeSocket(1, -1);
+            return;
+        }
         if (epoll_ctl(epolFd, EPOLL_CTL_ADD, socketFd, &eventMask) != 0) {
             if (LOGS_ENABLED) DEBUG_E("connection(%p) epoll_ctl, adding socket failed", this);
             closeSocket(1, -1);
         } else {
-            epollRegistered = true;
+            setEpollRegistered(true, "epoll_ctl_add");
             setTransportState(TransportState::EpollRegistered, "epoll_ctl_add");
         }
     }
@@ -3298,7 +3890,7 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
 }
 
 int32_t ConnectionSocket::checkSocketError(int32_t *error) {
-    if (socketFd < 0) {
+    if (!canCheckSocketError()) {
         return true;
     }
     int ret;
@@ -3334,6 +3926,11 @@ bool ConnectionSocket::dispatchWssPayloads(std::vector<std::vector<uint8_t>> &pa
         NativeByteBuffer *wssBuffer = BuffersStorage::getInstance().getFreeBuffer((uint32_t) payload.size());
         wssBuffer->writeBytes(payload.data(), (uint32_t) payload.size());
         wssBuffer->rewind();
+        if (!canDeliverReceivedData("wss_payload_recv")) {
+            wssBuffer->reuse();
+            closeSocket(1, -1);
+            return false;
+        }
         onReceivedData(wssBuffer);
         if (isDisconnected()) {
             return false;
@@ -3406,8 +4003,9 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
         return;
     }
     logTransportSnapshot("close_start", "closeSocket");
+    checkCloseSocketAction("closeSocket");
     setTransportState(TransportState::Closing, "closeSocket");
-    socketCloseNotified = true;
+    setSocketCloseNotified(true, "closeSocket");
     proxyCloseDiagnosticSuppressed = false;
     if (reason != 0
             && isCurrentMtProxyConnection()
@@ -3445,25 +4043,29 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
     ConnectionsManager::getInstance(instanceNum).detachConnection(this);
     if (socketFd >= 0) {
         if (epollRegistered) {
-            epoll_ctl(ConnectionsManager::getInstance(instanceNum).epolFd, EPOLL_CTL_DEL, socketFd, nullptr);
-            epollRegistered = false;
+            if (canUnregisterEpollSocket()) {
+                epoll_ctl(ConnectionsManager::getInstance(instanceNum).epolFd, EPOLL_CTL_DEL, socketFd, nullptr);
+            }
+            setEpollRegistered(false, "epoll_ctl_del");
         }
-        if (close(socketFd) != 0) {
-            if (LOGS_ENABLED) DEBUG_E("connection(%p) unable to close socket", this);
+        if (canCloseNativeSocket()) {
+            if (close(socketFd) != 0) {
+                if (LOGS_ENABLED) DEBUG_E("connection(%p) unable to close socket", this);
+            }
         }
-        socketFd = -1;
+        setSocketFd(-1, "close_native_socket");
     }
-    waitingForHostResolve = "";
-    adjustWriteOpAfterResolve = false;
+    setWaitingForHostResolve("", "closeSocket_cleanup");
+    setAdjustWriteOpAfterResolve(false, "closeSocket_cleanup");
     currentTransportWss = false;
     currentWssTransport.reset();
     currentWssRoute = WssRouteConfig();
     currentSocksUsername.clear();
     currentSocksPassword.clear();
-    proxyAuthState = 0;
-    tlsState = 0;
-    onConnectedSent = false;
-    mtproxySocketConnectedLogged = false;
+    setProxyAuthState(0, "closeSocket_cleanup");
+    setTlsState(0, "closeSocket_cleanup");
+    setConnectedNotified(false, "closeSocket_cleanup");
+    setMtProxySocketConnectedLogged(false, "closeSocket_cleanup");
     serverHelloHmacMismatchObserved = false;
     serverHelloHmacMismatchTime = 0;
     clearPendingClientHello();
@@ -3474,11 +4076,15 @@ void ConnectionSocket::closeSocket(int32_t reason, int32_t error) {
         tlsBuffer = nullptr;
     }
     tlsBufferRecordType = 0;
+    checkCloseSocketAction("closeSocket_cleanup");
     setTransportState(TransportState::Idle, "closeSocket_cleanup");
     onDisconnected(reason, error);
 }
 
 void ConnectionSocket::onEvent(uint32_t events) {
+    if (!canProcessEpollEvent()) {
+        return;
+    }
     if (isCurrentTransportWss()) {
         if (events & (EPOLLIN | EPOLLOUT)) {
             int32_t error;
@@ -3518,8 +4124,11 @@ void ConnectionSocket::onEvent(uint32_t events) {
                     proxyCheckDiagnostic = "post_handshake_no_appdata";
                     setTransportState(TransportState::MtprotoReady, "wss_ready");
                     if (LOGS_ENABLED) DEBUG_D("connection(%p) wss_startup on_connected mode=%d", this, currentWssRoute.mode);
+                    if (!canNotifyConnected("wss_ready")) {
+                        return;
+                    }
                     onConnected();
-                    onConnectedSent = true;
+                    setConnectedNotified(true, "wss_ready");
                 }
                 NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
                 buffer->clear();
@@ -3527,6 +4136,9 @@ void ConnectionSocket::onEvent(uint32_t events) {
                 buffer->flip();
                 uint32_t remaining = buffer->remaining();
                 if (remaining) {
+                    if (!canSendWssFrame()) {
+                        return;
+                    }
                     if (!currentWssTransport->sendFrame(buffer->bytes(), remaining)) {
                         closeSocket(1, -1);
                         return;
@@ -3569,6 +4181,10 @@ void ConnectionSocket::onEvent(uint32_t events) {
             closeSocket(1, error);
             return;
         } else {
+            if (!canReceiveRawSocketBytes()) {
+                closeSocket(1, -1);
+                return;
+            }
             ssize_t readCount;
             NativeByteBuffer *buffer = ConnectionsManager::getInstance(instanceNum).networkBuffer;
             while (true) {
@@ -3697,10 +4313,10 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup server_hello_hmac_ok bytes=%zu len1=%zu len2=%zu flight=%zu extra=%zu", this, matchedBytes, len1, len2, appFlightBytes, newBytesRead - matchedBytes);
                         releaseProxyHandshakeAdmission(true, "server_hello_hmac_ok");
                         proxyCheckDiagnostic = "post_handshake_no_appdata";
-                        tlsState = 1;
+                        setTlsState(1, "server_hello_hmac_ok");
                         startMtProxyStartupCover();
                         setTransportState(TransportState::MtprotoReady, "server_hello_hmac_ok");
-                        proxyAuthState = 0;
+                        setProxyAuthState(0, "server_hello_hmac_ok");
                         bytesRead = 0;
                         adjustWriteOp();
                     } else if (proxyAuthState == 2) {
@@ -3711,9 +4327,9 @@ void ConnectionSocket::onEvent(uint32_t events) {
                                 if (LOGS_ENABLED) DEBUG_E("connection(%p) unsupported proxy auth method", this);
                             } else if (auth_method == 0x02) {
                                 if (LOGS_ENABLED) DEBUG_D("connection(%p) proxy auth required", this);
-                                proxyAuthState = 3;
+                                setProxyAuthState(3, "socks_auth_required");
                             } else if (auth_method == 0x00) {
-                                proxyAuthState = 5;
+                                setProxyAuthState(5, "socks_no_auth");
                             }
                             adjustWriteOp();
                         } else {
@@ -3727,7 +4343,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
                                 closeSocket(1, -1);
                                 if (LOGS_ENABLED) DEBUG_E("connection(%p) auth invalid", this);
                             } else {
-                                proxyAuthState = 5;
+                                setProxyAuthState(5, "socks_auth_ok");
                             }
                             adjustWriteOp();
                         } else {
@@ -3739,7 +4355,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
                             uint8_t status = buffer->bytes()[1];
                             if (status == 0x00) {
                                 if (LOGS_ENABLED) DEBUG_D("connection(%p) connected via proxy", this);
-                                proxyAuthState = 0;
+                                setProxyAuthState(0, "socks_connected");
                                 adjustWriteOp();
                             } else {
                                 closeSocket(1, -1);
@@ -3831,6 +4447,10 @@ void ConnectionSocket::onEvent(uint32_t events) {
                                                 recordMtProxyEndpointDataPathSuccess("first_tls_app_recv");
                                                 if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup first_tls_app_recv payload=%d", this, tlsBuffer->limit());
                                             }
+                                            if (!canDeliverReceivedData("first_tls_app_recv")) {
+                                                closeSocket(1, -1);
+                                                return;
+                                            }
                                             onReceivedData(tlsBuffer);
                                             if (tlsBuffer == nullptr) {
                                                 return;
@@ -3862,6 +4482,10 @@ void ConnectionSocket::onEvent(uint32_t events) {
                             }
                         } else {
                             markMtProxyFirstPlainDataReceived((uint32_t) readCount);
+                            if (!canDeliverReceivedData("first_mtproxy_packet_recv")) {
+                                closeSocket(1, -1);
+                                return;
+                            }
                             onReceivedData(buffer);
                         }
                     }
@@ -3883,7 +4507,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
             return;
         } else {
             if (!mtproxySocketConnectedLogged && isCurrentMtProxyConnection()) {
-                mtproxySocketConnectedLogged = true;
+                setMtProxySocketConnectedLogged(true, "socket_connected");
                 proxyCheckDiagnostic = "tcp_connected_no_pong";
                 publishProxyConnectionStage("socket_connected");
                 releaseMtProxyEndpointTcpConnect("socket_connected");
@@ -3896,7 +4520,7 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         tlsHashMismatch = false;
                         serverHelloHmacMismatchObserved = false;
                         serverHelloHmacMismatchTime = 0;
-                        proxyAuthState = 11;
+                        setProxyAuthState(11, "client_hello_prepare");
                         setTransportState(TransportState::FaketlsHandshake, "client_hello_prepare");
                         currentEffectiveProxyTlsProfile = resolveMtProxyEffectiveTlsProfile(currentProxyTlsProfile, currentProxyTlsProfileKey);
                         const char *profileName = mtProxyTlsProfileName(currentEffectiveProxyTlsProfile);
@@ -3941,8 +4565,13 @@ void ConnectionSocket::onEvent(uint32_t events) {
                     }
                 } else {
                     if (proxyAuthState == 1) {
+                        if (!canSendSocksHandshakeFrame("socks_method_select", 1)) {
+                            return;
+                        }
+                        if (!canSendRawSocketBytes("raw_socks_method_send")) {
+                            return;
+                        }
                         lastEventTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
-                        proxyAuthState = 2;
                         tempBuffer->bytes[0] = 0x05;
                         tempBuffer->bytes[1] = 0x02;
                         tempBuffer->bytes[2] = 0x00;
@@ -3952,8 +4581,15 @@ void ConnectionSocket::onEvent(uint32_t events) {
                             closeSocket(1, -1);
                             return;
                         }
+                        setProxyAuthState(2, "socks_method_sent");
                         adjustWriteOp();
                     } else if (proxyAuthState == 3) {
+                        if (!canSendSocksHandshakeFrame("socks_auth", 3)) {
+                            return;
+                        }
+                        if (!canSendRawSocketBytes("raw_socks_auth_send")) {
+                            return;
+                        }
                         tempBuffer->bytes[0] = 0x01;
                         uint8_t len1 = (uint8_t) currentSocksUsername.length();
                         uint8_t len2 = (uint8_t) currentSocksPassword.length();
@@ -3961,14 +4597,20 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         memcpy(tempBuffer->bytes + 2, currentSocksUsername.c_str(), len1);
                         tempBuffer->bytes[2 + len1] = len2;
                         memcpy(tempBuffer->bytes + 3 + len1, currentSocksPassword.c_str(), len2);
-                        proxyAuthState = 4;
                         if (send(socketFd, tempBuffer->bytes, 3 + len1 + len2, 0) < 0) {
                             if (LOGS_ENABLED) DEBUG_E("connection(%p) send failed", this);
                             closeSocket(1, -1);
                             return;
                         }
+                        setProxyAuthState(4, "socks_auth_sent");
                         adjustWriteOp();
                     } else if (proxyAuthState == 5) {
+                        if (!canSendSocksHandshakeFrame("socks_connect", 5)) {
+                            return;
+                        }
+                        if (!canSendRawSocketBytes("raw_socks_connect_send")) {
+                            return;
+                        }
                         tempBuffer->bytes[0] = 0x05;
                         tempBuffer->bytes[1] = 0x01;
                         tempBuffer->bytes[2] = 0x00;
@@ -3976,12 +4618,12 @@ void ConnectionSocket::onEvent(uint32_t events) {
                         uint16_t networkPort = ntohs(currentPort);
                         inet_pton(isIpv6 ? AF_INET6 : AF_INET, currentAddress.c_str(), tempBuffer->bytes + 4);
                         memcpy(tempBuffer->bytes + 4 + (isIpv6 ? 16 : 4), &networkPort, sizeof(uint16_t));
-                        proxyAuthState = 6;
                         if (send(socketFd, tempBuffer->bytes, 4 + (isIpv6 ? 16 : 4) + 2, 0) < 0) {
                             if (LOGS_ENABLED) DEBUG_E("connection(%p) send failed", this);
                             closeSocket(1, -1);
                             return;
                         }
+                        setProxyAuthState(6, "socks_connect_sent");
                         adjustWriteOp();
                     }
                 }
@@ -3991,8 +4633,11 @@ void ConnectionSocket::onEvent(uint32_t events) {
                     setTransportState(TransportState::MtprotoReady, "on_connected");
                     publishProxyConnectionStage("on_connected");
                     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup on_connected tls=%d", this, (int) tlsState);
+                    if (!canNotifyConnected("on_connected")) {
+                        return;
+                    }
                     onConnected();
-                    onConnectedSent = true;
+                    setConnectedNotified(true, "on_connected");
                 }
                 if (tlsState != 0 && pendingTlsFrame != nullptr) {
                     if (!sendPendingTlsFrame()) {
@@ -4021,6 +4666,12 @@ void ConnectionSocket::onEvent(uint32_t events) {
                             return;
                         }
                     } else {
+                        if (!canSendPlainMtProtoPayload()) {
+                            return;
+                        }
+                        if (!canSendRawSocketBytes("raw_plain_mtproto_send")) {
+                            return;
+                        }
                         if ((sentLength = send(socketFd, buffer->bytes(), remaining, 0)) < 0) {
                             if (LOGS_ENABLED) DEBUG_D("connection(%p) send failed", this);
                             closeSocket(1, -1);
@@ -4054,6 +4705,9 @@ void ConnectionSocket::onEvent(uint32_t events) {
 }
 
 void ConnectionSocket::writeBuffer(uint8_t *data, uint32_t size) {
+    if (!canQueueOutboundBuffer("writeBufferRaw")) {
+        return;
+    }
     NativeByteBuffer *buffer = BuffersStorage::getInstance().getFreeBuffer(size);
     buffer->writeBytes(data, size);
     outgoingByteStream->append(buffer);
@@ -4061,17 +4715,22 @@ void ConnectionSocket::writeBuffer(uint8_t *data, uint32_t size) {
 }
 
 void ConnectionSocket::writeBuffer(NativeByteBuffer *buffer) {
+    if (!canQueueOutboundBuffer("writeBuffer")) {
+        if (buffer != nullptr) {
+            buffer->reuse();
+        }
+        return;
+    }
     outgoingByteStream->append(buffer);
     adjustWriteOp();
 }
 
 void ConnectionSocket::adjustWriteOp() {
     if (!waitingForHostResolve.empty()) {
-        adjustWriteOpAfterResolve = true;
+        setAdjustWriteOpAfterResolve(true, "adjustWriteOp_waiting_resolve");
         return;
     }
-    if (socketFd < 0 || !epollRegistered) {
-        logTransportInvariant("adjustWriteOp", socketFd < 0 ? "socket_closed" : "epoll_not_registered");
+    if (!canModifyEpollWriteInterest("adjustWriteOp")) {
         return;
     }
     eventMask.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
@@ -4177,11 +4836,15 @@ void ConnectionSocket::requestPendingHostResolve() {
     if (waitingForHostResolve.empty()) {
         return;
     }
+    if (!canStartHostResolve()) {
+        closeSocket(1, -1);
+        return;
+    }
     ConnectionsManager &manager = ConnectionsManager::getInstance(instanceNum);
     if (manager.delegate == nullptr) {
         bool cachedIpv6 = false;
         if (mtProxyEndpointUseCachedHostAddress(waitingForHostResolve, &cachedIpv6)) {
-            waitingForHostResolve = "";
+            setWaitingForHostResolve("", "host_resolve_cached_address");
             openConnectionInternal(cachedIpv6);
             return;
         }
@@ -4200,8 +4863,9 @@ void ConnectionSocket::requestPendingHostResolve() {
 
 void ConnectionSocket::onHostNameResolved(std::string host, std::string ip, bool ipv6) {
     ConnectionsManager::getInstance(instanceNum).scheduleTask([&, host, ip, ipv6] {
+        checkHostResolveCallback(host);
         if (waitingForHostResolve == host) {
-            waitingForHostResolve = "";
+            setWaitingForHostResolve("", "host_resolve_callback");
             if (ip.empty() || inet_pton(AF_INET, ip.c_str(), &socketAddress.sin_addr.s_addr) != 1) {
                 bool cachedIpv6 = ipv6;
                 if (mtProxyEndpointUseCachedHostAddress(host, &cachedIpv6)) {

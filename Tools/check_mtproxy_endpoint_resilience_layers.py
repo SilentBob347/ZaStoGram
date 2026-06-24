@@ -173,11 +173,12 @@ def main():
     open_connection_body = socket[open_connection_start:open_connection_end]
     require(
         "socketCloseNotified" in header
-        and "socketCloseNotified = false;" in open_connection_body
+        and 'setSocketCloseNotified(false, "openConnection")' in open_connection_body
         and "if (socketCloseNotified)" in close_body
         and "close_ignored_already_closed" in close_body
         and '"close_ignored_already_closed": "close_ignored_already_closed"' in analyzer
-        and "socketCloseNotified = true;" in close_body,
+        and 'setSocketCloseNotified(true, "closeSocket")' in close_body
+        and "socket_close_notify_state_change" in socket,
         "closeSocket must be idempotent so one socket failure cannot publish multiple endpoint failures or reconnect backoffs",
     )
     suspend_start = connection.find("void Connection::suspendConnection(bool idle)")
@@ -455,6 +456,19 @@ def main():
         "resetMtProxyEndpointStateForKey(currentMtProxyNetworkEndpointKey" in success_body
         and "resetMtProxyEndpointStateForKey(currentMtProxyEndpointKey" in success_body,
         "endpoint data-path success must clear both host/port network cooldown and secret/SNI recipe cooldown",
+    )
+    invalid_reason_guard = success_body.find('strcmp(reason, "first_tls_app_recv") != 0')
+    first_reset = success_body.find("resetMtProxyEndpointStateForKey")
+    require(
+        'reason == nullptr' in success_body
+        and 'strcmp(reason, "first_tls_app_recv") != 0' in success_body
+        and 'strcmp(reason, "first_mtproxy_packet_recv") != 0' in success_body
+        and "endpoint_data_path_success_rejected" in success_body
+        and "logTransportInvariant(\"endpoint_data_path_success\", \"invalid_reason\")" in success_body
+        and invalid_reason_guard != -1
+        and first_reset != -1
+        and invalid_reason_guard < first_reset,
+        "endpoint data-path success helper must reject non-appdata reasons before clearing endpoint cooldown/backoff",
     )
     require(
         "MT_PROXY_ENDPOINT_RECIPE_MAX_LEVEL = 3" in socket,

@@ -576,6 +576,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w Tools/coll
 TCP/connect, отправка `ClientHello`, проверка `server_hello_hmac_ok`, переход в
 `on_connected` или первые TLS `ApplicationData`-записи MTProto.
 
+Рядом создаётся `mtproxy_runtime_contract.txt`. Это строгая проверка live-лога:
+в `mtproxy_markers.txt` должны быть `transport_state=...`,
+`endpoint_handshake_ok` и `endpoint_data_path_success`, причём
+`endpoint_data_path_success` не может идти с `reason=server_hello_hmac_ok`.
+`endpoint_data_path_success` должен появляться только после первого `first_tls_app_recv`
+или `first_mtproxy_packet_recv` на том же native connection: успешный
+`server_hello_hmac_ok` сам по себе подтверждает только рукопожатие, а не
+рабочий data-path.
+Если надо перепроверить уже сохранённую сессию вручную:
+
+```bash
+python3 Tools/verify_mtproxy_runtime_logs.py mtproxy-logs-live/<session>
+```
+
 В отчёте есть блок `Layer recommendations`. Он не делает вид, что автоматически
 доказал DPI, а раскладывает фазы по слоям ремонта:
 `dns_endpoint_stability` для DNS/TCP до ClientHello,
