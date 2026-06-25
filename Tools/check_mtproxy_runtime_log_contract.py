@@ -73,6 +73,14 @@ def main() -> int:
         and socket.find(first_tls_recv_log) < socket.find(first_tls_recv_success),
         "ConnectionSocket must log first_tls_app_recv before endpoint_data_path_success",
     )
+    first_mtproxy_recv_log = 'DEBUG_D("connection(%p) mtproxy_startup first_mtproxy_packet_recv bytes=%u secret_kind=%s"'
+    first_mtproxy_recv_success = 'recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv")'
+    require(
+        first_mtproxy_recv_log in socket
+        and first_mtproxy_recv_success in socket
+        and socket.find(first_mtproxy_recv_log) < socket.find(first_mtproxy_recv_success),
+        "ConnectionSocket must log first_mtproxy_packet_recv before endpoint_data_path_success",
+    )
     require(
         "mtproxy_disconnect recv_eof" not in socket,
         "recv_eof marker must not masquerade as a full mtproxy_disconnect summary",

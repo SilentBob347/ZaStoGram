@@ -166,11 +166,19 @@ def main() -> int:
 
     plain_success_body = socket[
         socket.find('publishProxyConnectionStage("first_mtproxy_packet_recv")'):
-        socket.find('if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup first_mtproxy_packet_recv', socket.find('publishProxyConnectionStage("first_mtproxy_packet_recv")'))
+        socket.find("void ConnectionSocket::rotateMtProxyTlsProfileOnFailureIfNeeded", socket.find('publishProxyConnectionStage("first_mtproxy_packet_recv")'))
     ]
+    first_plain_recv_log = 'DEBUG_D("connection(%p) mtproxy_startup first_mtproxy_packet_recv bytes=%u secret_kind=%s"'
+    first_plain_recv_success = 'recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv")'
     require(
-        'recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv")' in plain_success_body,
+        first_plain_recv_success in plain_success_body,
         "first_mtproxy_packet_recv must record data-path success",
+        failures,
+    )
+    require(
+        first_plain_recv_log in plain_success_body
+        and plain_success_body.find(first_plain_recv_log) < plain_success_body.find(first_plain_recv_success),
+        "first_mtproxy_packet_recv must log app-data evidence before endpoint data-path success",
         failures,
     )
     plain_delivery_body = socket[

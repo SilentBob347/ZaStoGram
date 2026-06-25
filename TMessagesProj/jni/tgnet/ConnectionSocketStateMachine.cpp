@@ -61,6 +61,7 @@ const ConnectionSocketStateMachine::ActionRule *ConnectionSocketStateMachine::fi
             {"create_proxy_socket", LifecycleState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
             {"create_direct_socket", LifecycleState::Prepared, TransportSocketPolicy::NoSocket, -1, -1, false, false},
             {"configure_socket", LifecycleState::Prepared, TransportSocketPolicy::OpenWithoutEpoll, -1, -1, false, false},
+            {"configure_socket", LifecycleState::WaitingGate, TransportSocketPolicy::OpenWithoutEpoll, -1, -1, false, false},
             {"connect", LifecycleState::TcpConnecting, TransportSocketPolicy::OpenWithoutEpoll, -1, -1, false, false},
             {"epoll_ctl_add", LifecycleState::TcpConnecting, TransportSocketPolicy::OpenWithoutEpoll, -1, -1, false, false},
             {"checkSocketError", LifecycleState::EpollRegistered, TransportSocketPolicy::LiveEpoll, -1, -1, false, false},

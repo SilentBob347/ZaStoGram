@@ -3555,8 +3555,8 @@ void ConnectionSocket::markMtProxyFirstPlainDataReceived(uint32_t bytes) {
     mtproxyFirstDataReceivedTime = ConnectionsManager::getInstance(instanceNum).getCurrentTimeMonotonicMillis();
     proxyCheckDiagnostic = "dropped_after_appdata";
     publishProxyConnectionStage("first_mtproxy_packet_recv");
-    recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv");
     if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup first_mtproxy_packet_recv bytes=%u secret_kind=%s", this, bytes, currentSecretKind);
+    recordMtProxyEndpointDataPathSuccess("first_mtproxy_packet_recv");
 }
 
 void ConnectionSocket::rotateMtProxyTlsProfileOnFailureIfNeeded(int32_t reason, int32_t error) {
