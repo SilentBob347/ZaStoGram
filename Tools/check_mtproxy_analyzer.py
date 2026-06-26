@@ -283,8 +283,8 @@ def main():
     tcp_gate_wait.add(2, "connection(0x14) mtproxy_startup tcp_connect_gate key=198.51.100.14:443 active=1 delay=650 ready=0")
     tcp_gate_wait.add(3, "connection(0x14) mtproxy_startup tcp_connect_gate_wait key=198.51.100.14:443 active=1 delay=2300 ready=1")
     require(
-        tcp_gate_wait.verdict() == "waiting_tcp_connect_gate",
-        "an analyzer attempt that never started TCP because it waited in the TCP gate must not be reported as tcp_not_connected",
+        tcp_gate_wait.verdict() == "tcp_connect_gate_timeout",
+        "an analyzer attempt that never started TCP because it waited in the TCP gate must be a terminal gate timeout",
     )
 
     admission_wait = Attempt(key="admission-wait")
@@ -297,8 +297,22 @@ def main():
     admission_wait.add(2, "connection(0x15) mtproxy_startup admission_queue admission_mode=browser connection_pattern=browser key=198.51.100.15:443:cdn.example priority=0 active=1 limit=1 global_active=1 global_limit=1 queued=1 cooldown_ms=0 retry=650")
     admission_wait.add(3, "connection(0x15) mtproxy_startup admission_queue_wait admission_mode=browser connection_pattern=browser key=198.51.100.15:443:cdn.example priority=0 active=1 limit=1 global_active=1 global_limit=1 queued=1 cooldown_ms=0 retry=650")
     require(
-        admission_wait.verdict() == "waiting_proxy_admission",
-        "an analyzer attempt that only waited in admission queue must not be reported as tcp_not_connected",
+        admission_wait.verdict() == "admission_timeout",
+        "an analyzer attempt that only waited in admission queue must be a terminal admission timeout",
+    )
+    pre_tcp_overlap = Attempt(key="pre-tcp-gate-admission-overlap")
+    pre_tcp_overlap.add(
+        1,
+        "06-20 15:00:02.000 connection(0x18) mtproxy_startup connect_start proxy_state=10 "
+        "secret_kind=ee is_faketls=1 domain_len=17 profile=firefox_android "
+        "connection_pattern=browser address=198.51.100.18 port=443",
+    )
+    pre_tcp_overlap.add(2, "connection(0x18) mtproxy_startup tcp_connect_gate_grant key=198.51.100.18:443 active=1 ready=1")
+    pre_tcp_overlap.add(3, "connection(0x18) mtproxy_startup admission_queue admission_mode=browser connection_pattern=browser key=198.51.100.18:443:cdn.example priority=0 active=1 limit=1 global_active=1 global_limit=1 queued=1 cooldown_ms=0 retry=650")
+    pre_tcp_overlap.add(4, "connection(0x18) mtproxy_startup close_diagnostic phase=tcp_not_connected")
+    require(
+        pre_tcp_overlap.verdict() == "pre_tcp_gate_admission_overlap",
+        "old logs with TCP gate held while admission queued must be flagged as an architecture overlap, not generic tcp_not_connected",
     )
 
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:

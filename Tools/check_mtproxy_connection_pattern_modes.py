@@ -172,7 +172,9 @@ def main() -> None:
         "queued admission retry timers must wait until cooldown expires instead of waking repeatedly inside cooldown",
     )
     require(
-        "bool suppressQueuedGrant = !succeeded && wasActive && proxyHandshakeClientHelloSentTime > 0" in socket_cpp
+        "bool suppressQueuedGrant = !succeeded && wasActive" in socket_cpp
+        and "!isNeutralSchedulerWaitRelease" in socket_cpp
+        and "proxyHandshakeClientHelloSentTime > 0" in socket_cpp
         and "admission_hold_after_client_hello_failure" in socket_cpp
         and "if (hadAdmission && !suppressQueuedGrant && mtProxyConnectionPatternUsesAdmission(connectionPatternMode))" in socket_cpp,
         "post-ClientHello failures must not immediately dequeue another socket and recreate the slot -> ClientHello loop",

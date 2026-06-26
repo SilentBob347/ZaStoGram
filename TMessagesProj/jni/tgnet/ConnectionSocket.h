@@ -75,6 +75,7 @@ private:
     int32_t checkSocketError(int32_t *error);
     void closeSocket(int32_t reason, int32_t error);
     void openConnectionInternal(bool ipv6);
+    void queueAdjustWriteOpAfterOutboundAppend(const char *reason);
     void adjustWriteOp();
     const char *transportStateName(TransportState state);
     bool isAllowedTransportTransition(TransportState previous, TransportState next);
@@ -113,6 +114,9 @@ private:
     void setProxyEndpointBackoffReady(bool ready, const char *reason);
     void setProxyEndpointDnsCoalesceReady(bool ready, const char *reason);
     void setAdjustWriteOpAfterResolve(bool pending, const char *reason);
+    void setAdjustWriteOpAfterPreTcpGate(bool pending, const char *reason);
+    void setMtProxyTcpConnectAttemptStarted(bool started, const char *reason);
+    void classifyMtProxyPreTcpTimeoutDiagnostic(const char *reason);
     void setMtProxySocketConnectedLogged(bool logged, const char *reason);
     bool canStartHostResolve();
     void checkHostResolveCallback(const std::string &host);

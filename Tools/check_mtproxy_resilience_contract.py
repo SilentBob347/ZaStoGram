@@ -2,7 +2,7 @@
 from pathlib import Path
 import sys
 
-from mtproxy_phase_contract import analyzer_failure_phases
+from mtproxy_phase_contract import analyzer_failure_phases, java_phase_names
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -209,8 +209,9 @@ def main() -> None:
     )
 
     # GUI/log analyzer must expose the same phase vocabulary immediately.
-    for phase in sorted(analyzer_failure_phases() | {"endpoint_cooldown"}):
+    for phase in sorted((analyzer_failure_phases() & java_phase_names()) | {"endpoint_cooldown"}):
         require(phase in diagnostics, f"ProxyCheckDiagnostics must know {phase}")
+    for phase in sorted(analyzer_failure_phases() | {"endpoint_cooldown"}):
         require(phase in analyzer, f"analyzer must know {phase}")
     require(
         "ProxyConnectionEvent.nativeStage" in stage_bridge

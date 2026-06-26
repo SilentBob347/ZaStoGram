@@ -53,6 +53,8 @@ def main() -> int:
     require("enum class LifecycleState" in machine_header, "ConnectionSocketStateMachine must expose the lifecycle enum", failures)
     require("LifecycleState lifecycle" in machine_header, "ConnectionSocketStateMachine must keep one explicit lifecycle state", failures)
     require("bool registered" in machine_header, "ConnectionSocketStateMachine must track successful epoll registration explicitly", failures)
+    require("bool adjustWriteAfterPreTcpGate" in machine_header, "ConnectionSocketStateMachine must track writes queued before live epoll", failures)
+    require("bool tcpConnectAttemptStarted" in machine_header, "ConnectionSocketStateMachine must track whether a real TCP connect was attempted", failures)
     private_start = header.find("private:")
     protected_start = header.find("protected:")
     enum_pos = machine_header.find("enum class LifecycleState")
@@ -103,6 +105,10 @@ def main() -> int:
         "setProxyEndpointBackoffReady",
         "setProxyEndpointDnsCoalesceReady",
         "setAdjustWriteOpAfterResolve",
+        "setAdjustWriteOpAfterPreTcpGate",
+        "setMtProxyTcpConnectAttemptStarted",
+        "classifyMtProxyPreTcpTimeoutDiagnostic",
+        "queueAdjustWriteOpAfterOutboundAppend",
         "setMtProxySocketConnectedLogged",
         "canStartHostResolve",
         "checkHostResolveCallback",
@@ -378,6 +384,17 @@ def main() -> int:
     )
 
     open_internal_body = method_body(socket, "void ConnectionSocket::openConnectionInternal", "int32_t ConnectionSocket::checkSocketError")
+    circuit_pos = open_internal_body.find("scheduleMtProxyEndpointCircuitBreakerIfNeeded(ipv6)")
+    admission_pos = open_internal_body.find("scheduleProxyHandshakeAdmissionIfNeeded(ipv6, MT_PROXY_HANDSHAKE_TIMER_ADMISSION)")
+    configure_pos = open_internal_body.find("if (!canConfigureOpenSocket())")
+    tcp_gate_pos = open_internal_body.find("scheduleMtProxyEndpointTcpConnectGateIfNeeded(ipv6)")
+    connect_start_pos = open_internal_body.find('publishProxyConnectionStage("socket_connect_start")')
+    require(
+        -1 not in (circuit_pos, admission_pos, configure_pos, tcp_gate_pos, connect_start_pos)
+        and circuit_pos < admission_pos < configure_pos < tcp_gate_pos < connect_start_pos,
+        "openConnectionInternal must run endpoint circuit breaker, admission, socket configure, then TCP gate immediately before socket_connect_start",
+        failures,
+    )
     require(
         "if (!canConfigureOpenSocket())" in open_internal_body
         and "setsockopt(socketFd" in open_internal_body
@@ -434,6 +451,14 @@ def main() -> int:
         "releaseProxyHandshakeAdmission must run the transport-state admission release check",
         failures,
     )
+    require(
+        'strcmp(reason, "tcp_connect_gate_wait") == 0' in admission_release_body
+        and "isNeutralSchedulerWaitRelease" in admission_release_body
+        and "shouldApplyTcpFailureCooldown = wasActive && !isNeutralSchedulerWaitRelease && tcpConnectAttemptStarted" in admission_release_body
+        and "else if (!succeeded && wasActive && !isNeutralSchedulerWaitRelease && mtProxyConnectionPatternUsesCooldown(connectionPatternMode))" in admission_release_body,
+        "releaseProxyHandshakeAdmission must treat tcp_connect_gate_wait as a neutral scheduler release with no failure cooldown",
+        failures,
+    )
     admission_release_policy_body = method_body(socket, "void ConnectionSocket::checkProxyHandshakeAdmissionRelease", "void ConnectionSocket::clearPendingClientHello")
     require(
         'checkTransportActionRequirements("releaseProxyHandshakeAdmission")' in admission_release_policy_body
@@ -472,6 +497,16 @@ def main() -> int:
         "TCP connect gate flags must be written only by setProxyEndpointTcpConnectGateState",
         failures,
     )
+    tcp_gate_schedule_body = method_body(socket, "bool ConnectionSocket::scheduleMtProxyEndpointTcpConnectGateIfNeeded", "void ConnectionSocket::releaseMtProxyEndpointTcpConnect")
+    neutral_release_pos = tcp_gate_schedule_body.find('releaseProxyHandshakeAdmission(false, "tcp_connect_gate_wait")')
+    tcp_gate_timer_pos = tcp_gate_schedule_body.find("scheduleProxyHandshakeAdmissionTimer(delay, MT_PROXY_HANDSHAKE_TIMER_TCP_CONNECT_GATE, ipv6)")
+    require(
+        neutral_release_pos >= 0
+        and tcp_gate_timer_pos >= 0
+        and neutral_release_pos < tcp_gate_timer_pos,
+        "TCP gate waits after admission must release the admission slot neutrally before scheduling the gate timer",
+        failures,
+    )
     endpoint_backoff_ready_body = method_body(socket, "void ConnectionSocket::setProxyEndpointBackoffReady", "void ConnectionSocket::setProxyEndpointDnsCoalesceReady")
     require(
         "proxyEndpointBackoffReady = ready;" in endpoint_backoff_ready_body
@@ -490,13 +525,81 @@ def main() -> int:
         "DNS coalesce ready must be centralized and logged through setProxyEndpointDnsCoalesceReady",
         failures,
     )
-    write_after_resolve_body = method_body(socket, "void ConnectionSocket::setAdjustWriteOpAfterResolve", "void ConnectionSocket::setMtProxySocketConnectedLogged")
+    write_after_resolve_body = method_body(socket, "void ConnectionSocket::setAdjustWriteOpAfterResolve", "void ConnectionSocket::setAdjustWriteOpAfterPreTcpGate")
     require(
         "adjustWriteOpAfterResolve = pending;" in write_after_resolve_body
         and "write_after_resolve_state_change" in write_after_resolve_body
         and "transport_state=%s" in write_after_resolve_body
         and "epoll_registered=%d" in write_after_resolve_body,
         "deferred write-after-resolve latch must be centralized and logged through setAdjustWriteOpAfterResolve",
+        failures,
+    )
+    write_after_pre_tcp_body = method_body(socket, "void ConnectionSocket::setAdjustWriteOpAfterPreTcpGate", "void ConnectionSocket::setMtProxyTcpConnectAttemptStarted")
+    require(
+        "adjustWriteOpAfterPreTcpGate = pending;" in write_after_pre_tcp_body
+        and "write_after_pre_tcp_gate_state_change" in write_after_pre_tcp_body
+        and "transport_state=%s" in write_after_pre_tcp_body
+        and "epoll_registered=%d" in write_after_pre_tcp_body,
+        "deferred write-after-pre-TCP latch must be centralized and logged through setAdjustWriteOpAfterPreTcpGate",
+        failures,
+    )
+    tcp_started_body = method_body(socket, "void ConnectionSocket::setMtProxyTcpConnectAttemptStarted", "void ConnectionSocket::setMtProxySocketConnectedLogged")
+    require(
+        "tcpConnectAttemptStarted = started;" in tcp_started_body
+        and "tcp_connect_attempt_started_state_change" in tcp_started_body
+        and "transport_state=%s" in tcp_started_body
+        and "epoll_registered=%d" in tcp_started_body,
+        "TCP connect-attempt latch must be centralized and logged through setMtProxyTcpConnectAttemptStarted",
+        failures,
+    )
+    classify_pre_tcp_body = method_body(socket, "void ConnectionSocket::classifyMtProxyPreTcpTimeoutDiagnostic", "void ConnectionSocket::setMtProxySocketConnectedLogged")
+    require(
+        '"tcp_connect_gate_timeout"' in classify_pre_tcp_body
+        and '"admission_timeout"' in classify_pre_tcp_body
+        and "tcpConnectAttemptStarted" in classify_pre_tcp_body,
+        "pre-TCP timeout classifier must publish gate/admission terminal phases before close",
+        failures,
+    )
+    queue_write_body = method_body(socket, "void ConnectionSocket::queueAdjustWriteOpAfterOutboundAppend", "void ConnectionSocket::adjustWriteOp")
+    require(
+        "setAdjustWriteOpAfterPreTcpGate(true" in queue_write_body
+        and "setAdjustWriteOpAfterResolve(true" in queue_write_body
+        and "adjustWriteOp();" in queue_write_body,
+        "outbound appends must use a shared deferred-write helper before touching epoll",
+        failures,
+    )
+    write_raw_body = method_body(socket, "void ConnectionSocket::writeBuffer(uint8_t", "void ConnectionSocket::writeBuffer(NativeByteBuffer")
+    write_buffer_body = method_body(socket, "void ConnectionSocket::writeBuffer(NativeByteBuffer", "void ConnectionSocket::queueAdjustWriteOpAfterOutboundAppend")
+    require(
+        'queueAdjustWriteOpAfterOutboundAppend("writeBufferRaw")' in write_raw_body
+        and "adjustWriteOp();" not in write_raw_body,
+        "writeBuffer(uint8_t*) must defer pre-epoll write interest instead of calling adjustWriteOp directly",
+        failures,
+    )
+    require(
+        'queueAdjustWriteOpAfterOutboundAppend("writeBuffer")' in write_buffer_body
+        and "adjustWriteOp();" not in write_buffer_body,
+        "writeBuffer(NativeByteBuffer*) must defer pre-epoll write interest instead of calling adjustWriteOp directly",
+        failures,
+    )
+    direct_write_after_pre_tcp_writes = [
+        line.strip()
+        for line in socket.splitlines()
+        if "adjustWriteOpAfterPreTcpGate =" in line and "==" not in line
+    ]
+    require(
+        direct_write_after_pre_tcp_writes == ["adjustWriteOpAfterPreTcpGate = pending;"],
+        "pre-TCP deferred write latch must be written only by setAdjustWriteOpAfterPreTcpGate",
+        failures,
+    )
+    direct_tcp_started_writes = [
+        line.strip()
+        for line in socket.splitlines()
+        if "tcpConnectAttemptStarted =" in line and "==" not in line
+    ]
+    require(
+        direct_tcp_started_writes == ["tcpConnectAttemptStarted = started;"],
+        "TCP connect-attempt latch must be written only by setMtProxyTcpConnectAttemptStarted",
         failures,
     )
     socket_connected_logged_body = method_body(socket, "void ConnectionSocket::setMtProxySocketConnectedLogged", "bool ConnectionSocket::canStartHostResolve")

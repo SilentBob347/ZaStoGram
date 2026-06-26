@@ -525,12 +525,14 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         }
         getNotificationCenter().removeObserver(this, NotificationCenter.didUpdateConnectionState);
         getNotificationCenter().removeObserver(this, NotificationCenter.newSuggestionsAvailable);
+        NotificationCenter.getGlobalInstance().removeObserver(this, NotificationCenter.proxySettingsChanged);
     }
 
     @Override
     public boolean onFragmentCreate() {
         getNotificationCenter().addObserver(this, NotificationCenter.didUpdateConnectionState);
         getNotificationCenter().addObserver(this, NotificationCenter.newSuggestionsAvailable);
+        NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.proxySettingsChanged);
         return super.onFragmentCreate();
     }
 
@@ -924,6 +926,7 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         if (fragmentView != null) {
             fragmentView.requestLayout();
         }
+        updateProxyButton(false, true);
         try {
             if (currentViewNum >= VIEW_CODE_MESSAGE && currentViewNum <= VIEW_CODE_CALL && views[currentViewNum] instanceof LoginActivitySmsView) {
                 int time = ((LoginActivitySmsView) views[currentViewNum]).openTime;
@@ -8763,6 +8766,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
 
     private int currentConnectionState;
 
+    private boolean shouldAlwaysShowProxyButton() {
+        return activityMode == MODE_LOGIN || activityMode == MODE_CANCEL_ACCOUNT_DELETION;
+    }
+
     private void updateProxyButton(boolean animated, boolean force) {
         if (proxyDrawable == null) {
             return;
@@ -8777,7 +8784,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         final boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress);
         final boolean connected = currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating;
         final boolean connecting = currentConnectionState == ConnectionsManager.ConnectionStateConnecting || currentConnectionState == ConnectionsManager.ConnectionStateWaitingForNetwork || currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy;
-        if (proxyEnabled) {
+        if (shouldAlwaysShowProxyButton()) {
+            proxyDrawable.setConnected(proxyEnabled, connected, animated);
+            showProxyButton(true, animated);
+        } else if (proxyEnabled) {
             proxyDrawable.setConnected(true, connected, animated);
             showProxyButton(true, animated);
         } else if (getMessagesController().blockedCountry && !SharedConfig.proxyList.isEmpty() || connecting) {
@@ -8831,6 +8841,8 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     public void didReceivedNotification(int id, int account, Object... args) {
         if (id == NotificationCenter.didUpdateConnectionState) {
             updateProxyButton(true, false);
+        } else if (id == NotificationCenter.proxySettingsChanged) {
+            updateProxyButton(false, true);
         } else if (id == NotificationCenter.newSuggestionsAvailable) {
             if (emailChangeIsSuggestion && !getMessagesController().hasSetupEmailSuggestion()) {
                 finishFragment();

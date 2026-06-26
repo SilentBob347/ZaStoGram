@@ -62,7 +62,11 @@ SCHEDULER_DIAGNOSTIC_RE = re.compile(r"(?<![A-Za-z0-9_])diagnostic=([^ ]+)")
 TIME_RE = re.compile(r"^[0-9]{2}-[0-9]{2} ([0-9]{2}):([0-9]{2}):([0-9]{2})\.([0-9]{3})")
 
 FAKETLS_FAILURE_VERDICTS = {
+    "connection_not_started",
+    "admission_timeout",
+    "pre_tcp_gate_admission_overlap",
     "host_resolve_failed",
+    "tcp_connect_gate_timeout",
     "tcp_not_connected",
     "tcp_connected_no_pong",
     "client_hello_sent_no_server_hello",
@@ -72,7 +76,7 @@ FAKETLS_FAILURE_VERDICTS = {
     "dropped_early_after_appdata",
     "dropped_after_appdata",
 }
-NON_FAILURE_VERDICTS = {"ok", "handshake_ok_no_appdata_sent", "shadowed_by_usable_success", "waiting_proxy_admission", "waiting_tcp_connect_gate"}
+NON_FAILURE_VERDICTS = {"ok", "handshake_ok_no_appdata_sent", "shadowed_by_usable_success"}
 
 
 def event_marker_matches(text: str, needle: str) -> bool:
@@ -238,6 +242,9 @@ class Attempt:
             "connect_start": "connect_start",
             "host_resolve_start": "host_resolve_start",
             "host_resolve_failed": "host_resolve_failed",
+            "connection_not_started": "connection_not_started",
+            "admission_timeout": "admission_timeout",
+            "tcp_connect_gate_timeout": "tcp_connect_gate_timeout",
             "tcp_not_connected": "tcp_not_connected",
             "tcp_connected_no_pong": "tcp_connected_no_pong",
             "socket_connect_start": "socket_connect_start",
@@ -262,6 +269,7 @@ class Attempt:
             "endpoint_data_path_success": "endpoint_data_path_success",
             "endpoint_data_path_success_rejected": "endpoint_data_path_success_rejected",
             "endpoint_success": "endpoint_success",
+            "pre_tcp_timeout_diagnostic": "pre_tcp_timeout_diagnostic",
             "transport_invariant": "transport_invariant",
             "server_hello_hmac_ok": "server_hello_hmac_ok",
             "server_hello_hmac_mismatch": "server_hello_hmac_mismatch",
@@ -328,10 +336,20 @@ class Attempt:
             return "connected_without_socket_connected_marker"
         if has("host_resolve_failed"):
             return "host_resolve_failed"
+        if has("connection_not_started"):
+            return "connection_not_started"
+        if has("admission_timeout"):
+            return "admission_timeout"
+        if has("tcp_connect_gate_timeout"):
+            return "tcp_connect_gate_timeout"
+        if has("tcp_connect_gate_grant") and has("admission_queue") and not has("socket_connect_start"):
+            return "pre_tcp_gate_admission_overlap"
         if has("tcp_connect_gate") and not has("socket_connect_start"):
-            return "waiting_tcp_connect_gate"
+            return "tcp_connect_gate_timeout"
         if has("admission_queue") and not has("socket_connect_start"):
-            return "waiting_proxy_admission"
+            return "admission_timeout"
+        if not has("socket_connect_start"):
+            return "connection_not_started"
         if not has("socket_connected"):
             return "tcp_not_connected"
         if has("tcp_connected_no_pong"):
@@ -951,6 +969,9 @@ def print_layer_recommendations(attempts: list[Attempt], all_lines: list[str]) -
     print(
         "  "
         f"dns_endpoint_stability host_resolve_failed={verdicts['host_resolve_failed']} "
+        f"connection_not_started={verdicts['connection_not_started']} "
+        f"admission_timeout={verdicts['admission_timeout']} "
+        f"tcp_connect_gate_timeout={verdicts['tcp_connect_gate_timeout']} "
         f"tcp_not_connected={verdicts['tcp_not_connected']} "
         f"proxy_check_tcp_not_connected={proxy_check_phases['tcp_not_connected']} "
         f"proxy_check_tcp_connected_no_pong={proxy_check_phases['tcp_connected_no_pong']} "
@@ -1386,6 +1407,9 @@ def write_csv_reports(attempts: list[Attempt], global_lines: list[str], out_dir:
         }
         | {
             "ok",
+            "connection_not_started",
+            "admission_timeout",
+            "tcp_connect_gate_timeout",
             "tcp_not_connected",
             "tcp_connected_no_pong",
             "host_resolve_failed",
@@ -1556,12 +1580,14 @@ def print_report(attempts: list[Attempt], global_lines: list[str]) -> None:
 
     print()
     print("How to read the verdicts:")
-    print("- tcp_not_connected: TCP/connect/IP/proxy availability layer.")
+    print("- connection_not_started: this socket closed before a real TCP connect attempt started.")
+    print("- admission_timeout: this socket waited in the MTProxy admission scheduler until timeout; TCP did not start.")
+    print("- pre_tcp_gate_admission_overlap: historical source bug where TCP gate was held while admission was still queued.")
+    print("- tcp_connect_gate_timeout: this socket waited behind another active TCP connect until timeout; TCP did not start.")
+    print("- tcp_not_connected: TCP connect was attempted, but the socket never reached socket_connected.")
     print("- host_resolve_failed: proxy hostname did not resolve; compare DNS/VPN and sslip.io fast-path before blaming JA4.")
     print("- endpoint_cooldown: client delayed the next connect for this endpoint after a recent phase-specific failure.")
-    print("- waiting_proxy_admission: this socket is queued behind the MTProxy connection scheduler; TCP has not started yet.")
     print("- tcp_connect_gate: client delayed a duplicate active TCP connect attempt for the same MTProxy endpoint.")
-    print("- waiting_tcp_connect_gate: this socket never started TCP yet; it is waiting behind another active TCP connect.")
     print("- dns_coalesce_wait: client delayed a duplicate cold DNS resolve for the same proxy host:port.")
     print("- dns_cache_hit/dns_cache_store: client used or updated the last-good IP for a domain proxy.")
     print("- phase_adaptive_recipe: client changed the next FakeTLS startup recipe after a phase-specific failure.")

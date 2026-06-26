@@ -209,8 +209,11 @@
     <string name="ProxyStatusUnchecked">Not checked</string>
     <string name="ProxyStatusNotRespondingNow">Not responding right now</string>
     <string name="ProxyStatusStartFailed">Check could not start</string>
+    <string name="ProxyStatusConnectionNotStarted">Proxy connection did not start</string>
     <string name="ProxyStatusConnectingTimeout">Proxy connection timed out</string>
+    <string name="ProxyStatusAdmissionTimeout">Proxy connection slot timed out before TCP started</string>
     <string name="ProxyStatusHostResolveFailed">Could not resolve proxy host</string>
+    <string name="ProxyStatusTcpConnectGateTimeout">Timed out before proxy TCP start</string>
     <string name="ProxyStatusTcpNotConnected">TCP did not connect: server or port is unreachable</string>
     <string name="ProxyStatusTcpConnectedNoPong">TCP connected, but MTProxy did not answer</string>
     <string name="ProxyStatusNetworkBlockSuspected">Looks like network filtering before MTProxy reply</string>

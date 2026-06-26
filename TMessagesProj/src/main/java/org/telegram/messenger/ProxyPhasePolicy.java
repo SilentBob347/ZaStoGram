@@ -96,7 +96,14 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.FIRST_MTPROXY_PACKET_RECV:
                 return success(KeyScope.NETWORK);
 
+            case ProxyCheckDiagnostics.CONNECTION_NOT_STARTED:
+                return failure(KeyScope.NONE, false, false);
+
+            case ProxyCheckDiagnostics.ADMISSION_TIMEOUT:
+                return failure(KeyScope.EXACT, true, true);
+
             case ProxyCheckDiagnostics.HOST_RESOLVE_FAILED:
+            case ProxyCheckDiagnostics.TCP_CONNECT_GATE_TIMEOUT:
             case ProxyCheckDiagnostics.TCP_NOT_CONNECTED:
             case ProxyCheckDiagnostics.TCP_CONNECTED_NO_PONG:
             case ProxyCheckDiagnostics.NETWORK_BLOCK_SUSPECTED:
@@ -110,9 +117,11 @@ public final class ProxyPhasePolicy {
             case ProxyCheckDiagnostics.CONNECTING_TIMEOUT:
                 return failure(KeyScope.EXACT, true, true);
 
-            case ProxyCheckDiagnostics.START_FAILED:
             case ProxyCheckDiagnostics.UNKNOWN_FAIL:
                 return failure(KeyScope.EXACT, true, false);
+
+            case ProxyCheckDiagnostics.START_FAILED:
+                return failure(KeyScope.NONE, false, false);
 
             case ProxyCheckDiagnostics.DROPPED_AFTER_APPDATA:
                 return failure(KeyScope.EXACT, false, false);

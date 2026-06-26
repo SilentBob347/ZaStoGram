@@ -53,8 +53,12 @@ PHASES = (
     MtProxyPhase("first_mtproxy_packet_recv", PHASE_SUCCESS, native=True, java=True, analyzer=False, endpoint_key=ENDPOINT_NETWORK),
 
     MtProxyPhase("start_failed", PHASE_FAILURE, native=False, java=True, analyzer=False, endpoint_key=ENDPOINT_NONE),
+    MtProxyPhase("connection_not_started", PHASE_FAILURE, native=True, java=True, analyzer=True, endpoint_key=ENDPOINT_NONE),
     MtProxyPhase("connecting_timeout", PHASE_FAILURE, native=False, java=True, analyzer=False, endpoint_key=ENDPOINT_EXACT, rotation=True),
+    MtProxyPhase("admission_timeout", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_EXACT, rotation=True),
+    MtProxyPhase("pre_tcp_gate_admission_overlap", PHASE_FAILURE, native=False, java=False, analyzer=True, endpoint_key=ENDPOINT_NONE),
     MtProxyPhase("host_resolve_failed", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_NETWORK, rotation=True),
+    MtProxyPhase("tcp_connect_gate_timeout", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_NETWORK, rotation=True),
     MtProxyPhase("tcp_not_connected", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_NETWORK, rotation=True),
     MtProxyPhase("tcp_connected_no_pong", PHASE_FAILURE, native=True, java=True, analyzer=True, reconnect_backoff=True, endpoint_key=ENDPOINT_NETWORK, rotation=True),
     MtProxyPhase("network_block_suspected", PHASE_FAILURE, native=False, java=True, analyzer=False, endpoint_key=ENDPOINT_NETWORK, rotation=True),
@@ -68,8 +72,6 @@ PHASES = (
     MtProxyPhase("connected_without_socket_connected_marker", PHASE_NEUTRAL, native=False, java=False, analyzer=True, endpoint_key=ENDPOINT_NONE),
     MtProxyPhase("handshake_ok_no_appdata_sent", PHASE_NEUTRAL, native=False, java=False, analyzer=True, endpoint_key=ENDPOINT_NONE),
     MtProxyPhase("shadowed_by_usable_success", PHASE_NEUTRAL, native=False, java=False, analyzer=True, endpoint_key=ENDPOINT_NONE),
-    MtProxyPhase("waiting_proxy_admission", PHASE_LIVE, native=False, java=False, analyzer=True, endpoint_key=ENDPOINT_EXACT),
-    MtProxyPhase("waiting_tcp_connect_gate", PHASE_LIVE, native=False, java=False, analyzer=True, endpoint_key=ENDPOINT_NETWORK),
 )
 
 

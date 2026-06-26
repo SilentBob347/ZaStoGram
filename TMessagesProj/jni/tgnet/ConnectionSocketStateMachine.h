@@ -168,6 +168,7 @@ public:
         uint32_t startupCoverFrameCount = 0;
         bool startupCoverStartedLogged = false;
         bool startupCoverEndedLogged = false;
+        bool adjustWriteAfterPreTcpGate = false;
     };
 
     struct DiagnosticsSubstate {
@@ -189,6 +190,7 @@ public:
         std::string currentMtProxyNetworkEndpointKey;
         std::string currentMtProxyDnsCacheKey;
         std::string proxyCheckDiagnostic = "tcp_not_connected";
+        bool tcpConnectAttemptStarted = false;
     };
 
     SocketSubstate socket;

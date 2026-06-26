@@ -76,11 +76,13 @@
 #define startupCoverFrameCount stateMachine.pendingWrite.startupCoverFrameCount
 #define startupCoverStartedLogged stateMachine.pendingWrite.startupCoverStartedLogged
 #define startupCoverEndedLogged stateMachine.pendingWrite.startupCoverEndedLogged
+#define adjustWriteOpAfterPreTcpGate stateMachine.pendingWrite.adjustWriteAfterPreTcpGate
 #define currentProxyTlsProfileKey stateMachine.diagnostics.currentProxyTlsProfileKey
 #define currentMtProxyEndpointKey stateMachine.diagnostics.currentMtProxyEndpointKey
 #define currentMtProxyNetworkEndpointKey stateMachine.diagnostics.currentMtProxyNetworkEndpointKey
 #define currentMtProxyDnsCacheKey stateMachine.diagnostics.currentMtProxyDnsCacheKey
 #define proxyCheckDiagnostic stateMachine.diagnostics.proxyCheckDiagnostic
+#define tcpConnectAttemptStarted stateMachine.diagnostics.tcpConnectAttemptStarted
 #define tlsHashMismatch stateMachine.fakeTls.tlsHashMismatch
 #define serverHelloHmacMismatchObserved stateMachine.fakeTls.serverHelloHmacMismatchObserved
 #define serverHelloHmacMismatchTime stateMachine.fakeTls.serverHelloHmacMismatchTime
@@ -1835,7 +1837,8 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
     int32_t connectionPatternMode = normalizeMtProxyConnectionPatternMode(currentConnectionPatternMode);
     bool hadAdmission = proxyHandshakeAdmissionActive || proxyHandshakeAdmissionQueued;
     bool wasActive = proxyHandshakeAdmissionActive;
-    bool suppressQueuedGrant = !succeeded && wasActive && proxyHandshakeClientHelloSentTime > 0 && strcmp(reason, "cancel") != 0;
+    bool isNeutralSchedulerWaitRelease = reason != nullptr && strcmp(reason, "tcp_connect_gate_wait") == 0;
+    bool suppressQueuedGrant = !succeeded && wasActive && !isNeutralSchedulerWaitRelease && proxyHandshakeClientHelloSentTime > 0 && strcmp(reason, "cancel") != 0;
     bool publishHoldPhase = false;
     std::string admissionKey = proxyHandshakeAdmissionKey;
     if (hadAdmission) {
@@ -1850,7 +1853,7 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
         }
         int64_t clientHelloElapsed = proxyHandshakeClientHelloSentTime > 0 ? now - proxyHandshakeClientHelloSentTime : 0;
         bool shouldApplyFreezeCooldown = wasActive && proxyHandshakeClientHelloSentTime > 0 && clientHelloElapsed >= MT_PROXY_HANDSHAKE_FREEZE_TIMEOUT_MS;
-        bool shouldApplyTcpFailureCooldown = wasActive && proxyHandshakeClientHelloSentTime <= 0 && strcmp(reason, "cancel") != 0;
+        bool shouldApplyTcpFailureCooldown = wasActive && !isNeutralSchedulerWaitRelease && tcpConnectAttemptStarted && proxyHandshakeClientHelloSentTime <= 0 && strcmp(reason, "cancel") != 0;
         if (succeeded) {
             mtProxyRecordHandshakeSuccess(state, now);
         } else if (shouldApplyTcpFailureCooldown && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
@@ -1859,7 +1862,7 @@ void ConnectionSocket::releaseProxyHandshakeAdmission(bool succeeded, const char
         } else if (shouldApplyFreezeCooldown && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
             mtProxyApplyFreezeCooldown(state, now, connectionPatternMode);
             if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_freeze_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, admissionKey.c_str(), state.freezePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
-        } else if (!succeeded && wasActive && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
+        } else if (!succeeded && wasActive && !isNeutralSchedulerWaitRelease && mtProxyConnectionPatternUsesCooldown(connectionPatternMode)) {
             mtProxyApplyFailureCooldown(state, now, connectionPatternMode);
             if (LOGS_ENABLED) DEBUG_D("connection(%p) mtproxy_startup admission_failure_cooldown admission_mode=%s connection_pattern=%s reason=%s key=%s penalty=%d cooldown_ms=%ld", this, mtProxyConnectionPatternModeName(connectionPatternMode), mtProxyConnectionPatternModeName(connectionPatternMode), reason, admissionKey.c_str(), state.handshakeFailurePenalty, (long) std::max<int64_t>(0, state.cooldownUntil - now));
         } else if (shouldApplyFreezeCooldown) {
@@ -1972,6 +1975,9 @@ bool ConnectionSocket::scheduleMtProxyEndpointTcpConnectGateIfNeeded(bool ipv6) 
         DEBUG_D("connection(%p) mtproxy_startup tcp_connect_gate_wait key=%s active=%d delay=%u ready=%d", this, currentMtProxyNetworkEndpointKey.c_str(), gateResult.activeTcpConnects, delay, wasReady ? 1 : 0);
     }
     setTransportState(TransportState::WaitingGate, "tcp_connect_gate");
+    if (proxyHandshakeAdmissionActive) {
+        releaseProxyHandshakeAdmission(false, "tcp_connect_gate_wait");
+    }
     scheduleProxyHandshakeAdmissionTimer(delay, MT_PROXY_HANDSHAKE_TIMER_TCP_CONNECT_GATE, ipv6);
     return true;
 }
@@ -2564,6 +2570,51 @@ void ConnectionSocket::setAdjustWriteOpAfterResolve(bool pending, const char *re
     }
 }
 
+void ConnectionSocket::setAdjustWriteOpAfterPreTcpGate(bool pending, const char *reason) {
+    if (adjustWriteOpAfterPreTcpGate == pending) {
+        return;
+    }
+    adjustWriteOpAfterPreTcpGate = pending;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport write_after_pre_tcp_gate_state_change pending=%d reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, adjustWriteOpAfterPreTcpGate ? 1 : 0, reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+void ConnectionSocket::setMtProxyTcpConnectAttemptStarted(bool started, const char *reason) {
+    if (tcpConnectAttemptStarted == started) {
+        return;
+    }
+    tcpConnectAttemptStarted = started;
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_transport tcp_connect_attempt_started_state_change started=%d reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, tcpConnectAttemptStarted ? 1 : 0, reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
+void ConnectionSocket::classifyMtProxyPreTcpTimeoutDiagnostic(const char *reason) {
+    if (!isCurrentMtProxyConnection() || tcpConnectAttemptStarted) {
+        return;
+    }
+    if (currentTransportState != TransportState::Prepared && currentTransportState != TransportState::WaitingGate && currentTransportState != TransportState::TcpConnecting) {
+        return;
+    }
+    std::string previousDiagnostic = proxyCheckDiagnostic;
+    if (!waitingForHostResolve.empty()) {
+        proxyCheckDiagnostic = "host_resolve_failed";
+    } else if (proxyEndpointTcpConnectGatePublished || proxyEndpointTcpConnectReady) {
+        proxyCheckDiagnostic = "tcp_connect_gate_timeout";
+    } else if (proxyHandshakeAdmissionQueued || proxyHandshakeAdmissionQueuePublished || proxyHandshakeAdmissionReady || (proxyHandshakeAdmissionActive && proxyHandshakeClientHelloSentTime <= 0)) {
+        proxyCheckDiagnostic = "admission_timeout";
+    } else {
+        proxyCheckDiagnostic = "connection_not_started";
+    }
+    if (previousDiagnostic == proxyCheckDiagnostic) {
+        return;
+    }
+    if (LOGS_ENABLED) {
+        DEBUG_D("connection(%p) mtproxy_startup pre_tcp_timeout_diagnostic phase=%s reason=%s transport_state=%s epoll_registered=%d admission_active=%d admission_queued=%d tcp_gate_active=%d waiting_resolve=%d proxy_state=%d tls_state=%d", this, proxyCheckDiagnostic.c_str(), reason != nullptr ? reason : "unknown", transportStateName(currentTransportState), epollRegistered ? 1 : 0, proxyHandshakeAdmissionActive ? 1 : 0, proxyHandshakeAdmissionQueued ? 1 : 0, proxyEndpointTcpConnectActive ? 1 : 0, waitingForHostResolve.empty() ? 0 : 1, (int) proxyAuthState, (int) tlsState);
+    }
+}
+
 void ConnectionSocket::setMtProxySocketConnectedLogged(bool logged, const char *reason) {
     if (mtproxySocketConnectedLogged == logged) {
         return;
@@ -2979,6 +3030,8 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     currentSocksPassword.clear();
     setWaitingForHostResolve("", "openConnection");
     setAdjustWriteOpAfterResolve(false, "openConnection");
+    setAdjustWriteOpAfterPreTcpGate(false, "openConnection");
+    setMtProxyTcpConnectAttemptStarted(false, "openConnection");
     currentSecret = "";
     currentSecretDomain = "";
     currentSecretKind = "none";
@@ -3004,7 +3057,7 @@ void ConnectionSocket::openConnection(std::string address, uint16_t port, std::s
     currentMtProxyEndpointKey = "";
     currentMtProxyNetworkEndpointKey = "";
     currentMtProxyDnsCacheKey = "";
-    proxyCheckDiagnostic = "tcp_not_connected";
+    proxyCheckDiagnostic = "connection_not_started";
     proxyHandshakeAdmissionKey = "";
     setProxyHandshakeAdmissionState(-1, 0, -1, -1, "openConnection");
     setProxyEndpointBackoffReady(false, "openConnection");
@@ -3403,9 +3456,6 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
     if (isCurrentMtProxyConnection() && scheduleMtProxyEndpointCircuitBreakerIfNeeded(ipv6)) {
         return;
     }
-    if (isCurrentMtProxyConnection() && scheduleMtProxyEndpointTcpConnectGateIfNeeded(ipv6)) {
-        return;
-    }
     if (proxyAuthState >= 10) {
         if (scheduleProxyHandshakeAdmissionIfNeeded(ipv6, MT_PROXY_HANDSHAKE_TIMER_ADMISSION)) {
             return;
@@ -3436,8 +3486,14 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
         return;
     }
 
+    if (isCurrentMtProxyConnection() && scheduleMtProxyEndpointTcpConnectGateIfNeeded(ipv6)) {
+        return;
+    }
+
     publishProxyConnectionStage("socket_connect_start");
     setTransportState(TransportState::TcpConnecting, "socket_connect_start");
+    setMtProxyTcpConnectAttemptStarted(true, "socket_connect_start");
+    proxyCheckDiagnostic = "tcp_not_connected";
     if (LOGS_ENABLED) DEBUG_D("connection(%p) %s socket_connect_start ipv6=%d state=%d", this, currentTransportWss ? "wss_startup" : "mtproxy_startup", ipv6 ? 1 : 0, (int) proxyAuthState);
     if (!canStartTcpConnect()) {
         closeSocket(1, -1);
@@ -3460,7 +3516,13 @@ void ConnectionSocket::openConnectionInternal(bool ipv6) {
             setTransportState(TransportState::EpollRegistered, "epoll_ctl_add");
         }
     }
-    if (adjustWriteOpAfterResolve) {
+    if (epollRegistered && (adjustWriteOpAfterResolve || adjustWriteOpAfterPreTcpGate)) {
+        if (adjustWriteOpAfterResolve) {
+            setAdjustWriteOpAfterResolve(false, "epoll_ctl_add");
+        }
+        if (adjustWriteOpAfterPreTcpGate) {
+            setAdjustWriteOpAfterPreTcpGate(false, "epoll_ctl_add");
+        }
         adjustWriteOp();
     }
 }
@@ -4288,7 +4350,7 @@ void ConnectionSocket::writeBuffer(uint8_t *data, uint32_t size) {
     NativeByteBuffer *buffer = BuffersStorage::getInstance().getFreeBuffer(size);
     buffer->writeBytes(data, size);
     outgoingByteStream->append(buffer);
-    adjustWriteOp();
+    queueAdjustWriteOpAfterOutboundAppend("writeBufferRaw");
 }
 
 void ConnectionSocket::writeBuffer(NativeByteBuffer *buffer) {
@@ -4299,6 +4361,18 @@ void ConnectionSocket::writeBuffer(NativeByteBuffer *buffer) {
         return;
     }
     outgoingByteStream->append(buffer);
+    queueAdjustWriteOpAfterOutboundAppend("writeBuffer");
+}
+
+void ConnectionSocket::queueAdjustWriteOpAfterOutboundAppend(const char *reason) {
+    if (!waitingForHostResolve.empty()) {
+        setAdjustWriteOpAfterResolve(true, reason);
+        return;
+    }
+    if (!epollRegistered || currentTransportState == TransportState::Prepared || currentTransportState == TransportState::WaitingGate || currentTransportState == TransportState::TcpConnecting) {
+        setAdjustWriteOpAfterPreTcpGate(true, reason);
+        return;
+    }
     adjustWriteOp();
 }
 
@@ -4365,6 +4439,7 @@ bool ConnectionSocket::checkTimeout(int64_t now) {
     }
     if (timeout != 0 && (now - lastEventTime) > (int64_t) timeout * 1000) {
         if (!onConnectedSent || hasPendingRequests()) {
+            classifyMtProxyPreTcpTimeoutDiagnostic("checkTimeout");
             closeSocket(2, 0);
             return true;
         } else {
