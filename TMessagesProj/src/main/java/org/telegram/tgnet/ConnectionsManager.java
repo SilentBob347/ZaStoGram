@@ -511,6 +511,11 @@ public class ConnectionsManager extends BaseController {
                         try {
                             resp = object.deserializeResponse(buff, magic, true);
                         } catch (Exception e2) {
+                            boolean dropAnswer = TLParseException.isRpcDropAnswerConstructor(magic);
+                            logTlParseExceptionContext(object, e2, magic, requestToken, requestMsgId, connectionType, dcId, responseSize, dropAnswer);
+                            if (dropAnswer) {
+                                return;
+                            }
                             if (BuildVars.DEBUG_PRIVATE_VERSION) {
                                 throw e2;
                             }
@@ -569,6 +574,81 @@ public class ConnectionsManager extends BaseController {
         } catch (Exception e) {
             FileLog.e(e);
         }
+    }
+
+    private static void logTlParseExceptionContext(TLObject request, Throwable error, int constructor, int requestToken, long requestMsgId, int connectionType, int dcId, int responseSize, boolean dropAnswer) {
+        StringBuilder builder = new StringBuilder(dropAnswer ? "tl_parse_drop_answer_ignored" : "tl_parse_exception_context");
+        builder.append(" raw_constructor=0x").append(Integer.toHexString(constructor));
+        builder.append(" expected_response=").append(expectedResponseType(request));
+        builder.append(" request=").append(request == null ? "null" : request.getClass().getSimpleName());
+        builder.append(" request_token=").append(requestToken);
+        builder.append(" request_msg_id=0x").append(Long.toHexString(requestMsgId));
+        builder.append(" conType=").append(connectionType);
+        builder.append(" dc=").append(dcId);
+        builder.append(" response_size=").append(responseSize);
+        builder.append(" ").append(fileRequestContext(request));
+        builder.append(" error=").append(error == null ? "null" : error.getClass().getSimpleName());
+        String message = error == null ? null : error.getMessage();
+        if (!TextUtils.isEmpty(message)) {
+            builder.append(" message=").append(message.replace(' ', '_'));
+        }
+        if (dropAnswer) {
+            builder.append(" action=ignored");
+            FileLog.d(builder.toString());
+        } else {
+            FileLog.e(builder.toString());
+        }
+    }
+
+    private static String expectedResponseType(TLObject request) {
+        if (request instanceof TLRPC.TL_upload_getFile) {
+            return "TLRPC.upload_File{0x96a18d5,0xf18cda44}";
+        }
+        if (request instanceof TLRPC.TL_upload_getCdnFile) {
+            return "TLRPC.upload_CdnFile{0xa99fca4f,0xeea8e46e}";
+        }
+        if (request instanceof TLRPC.TL_upload_getFileHashes) {
+            return "Vector<TL_fileHash>";
+        }
+        if (request instanceof TLRPC.TL_upload_getCdnFileHashes) {
+            return "Vector<TL_fileHash>";
+        }
+        return request == null ? "unknown" : request.getClass().getName() + ".deserializeResponse";
+    }
+
+    private static String fileRequestContext(TLObject request) {
+        if (request instanceof TLRPC.TL_upload_getFile) {
+            TLRPC.TL_upload_getFile getFile = (TLRPC.TL_upload_getFile) request;
+            return "file=" + inputFileLocationContext(getFile.location)
+                    + " offset=" + getFile.offset
+                    + " limit=" + getFile.limit
+                    + " precise=" + getFile.precise
+                    + " cdn_supported=" + getFile.cdn_supported;
+        }
+        if (request instanceof TLRPC.TL_upload_getCdnFile) {
+            TLRPC.TL_upload_getCdnFile getCdnFile = (TLRPC.TL_upload_getCdnFile) request;
+            return "file=cdn_token:" + (getCdnFile.file_token == null ? 0 : getCdnFile.file_token.length)
+                    + " offset=" + getCdnFile.offset
+                    + " limit=" + getCdnFile.limit;
+        }
+        return "file=unknown offset=unknown limit=unknown";
+    }
+
+    private static String inputFileLocationContext(TLRPC.InputFileLocation location) {
+        if (location == null) {
+            return "null";
+        }
+        StringBuilder builder = new StringBuilder(location.getClass().getSimpleName());
+        if (location.id != 0) {
+            builder.append(":id=").append(location.id);
+        }
+        if (location.volume_id != 0 || location.local_id != 0) {
+            builder.append(":volume=").append(location.volume_id).append(":local=").append(location.local_id);
+        }
+        if (!TextUtils.isEmpty(location.thumb_size)) {
+            builder.append(":thumb=").append(location.thumb_size);
+        }
+        return builder.toString();
     }
 
     private final ConcurrentHashMap<Integer, RequestCallbacks> requestCallbacks = new ConcurrentHashMap<>();

@@ -313,6 +313,22 @@ def verify_startup_warmup_fanout(lines: list[str]) -> list[str]:
     return failures
 
 
+def verify_log_noise_and_tlparse(lines: list[str]) -> list[str]:
+    failures: list[str] = []
+    for line in lines:
+        lower_line = line.lower()
+        if "received packet size less" in lower_line or "then message size" in lower_line:
+            failures.append(f"partial packet assembly must not use failure-looking wording: {line}")
+        if "tlparseexception" in lower_line and "upload_file" in lower_line:
+            if "tl_parse_drop_answer_ignored" in lower_line:
+                continue
+            if "e/tmessages" in lower_line or "fatal/tmessages" in lower_line or "fatal" in lower_line:
+                failures.append(f"upload_File TLParseException must include context and avoid E/FATAL for drop/cancel responses: {line}")
+        if "filestreamloadoperation" in lower_line and ("e/tmessages" in lower_line or "fatal/tmessages" in lower_line):
+            failures.append(f"FileStreamLoadOperation lifecycle logs must not use E/tmessages: {line}")
+    return failures
+
+
 def verify_lines(lines: list[str]) -> list[str]:
     failures: list[str] = []
     transport_state_lines = [line for line in lines if "transport_state=" in line]
@@ -363,6 +379,7 @@ def verify_lines(lines: list[str]) -> list[str]:
     failures.extend(verify_dns_outage_rotation_hold(lines))
     failures.extend(verify_dns_resolver_logs(lines))
     failures.extend(verify_startup_warmup_fanout(lines))
+    failures.extend(verify_log_noise_and_tlparse(lines))
 
     return failures
 

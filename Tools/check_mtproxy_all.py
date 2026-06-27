@@ -34,6 +34,7 @@ CHECKS = [
     "check_debug_parser_unmapped_logs.py",
     "check_buffer_pool_pressure.py",
     "check_log_event_atomicity.py",
+    "check_mtproxy_tlparse_upload_context.py",
     "check_proxy_rotation_engine.py",
     "check_proxy_rotation_behavior.py",
     "check_proxy_check_diagnostics.py",
